@@ -51,6 +51,7 @@ Advanced Usage:
 """
 
 import json
+import textwrap
 from enum import Enum
 from typing import Union, List, Dict, Optional, Any
 from pydantic import BaseModel, Field, field_validator
@@ -580,9 +581,14 @@ class Question(BaseModel):
             lines = ['### System Instructions:']
             for i, inst in enumerate(all_instructions, 1):
                 lines.append(f'    {i}) **{inst.subtitle.strip()}**:')
-                for line in inst.instructions.splitlines():
+                # Keep each line's indentation relative to its block, so a code example
+                # keeps its nesting. dedent removes only the indentation every non-blank
+                # line shares. It knows only \n as a line break, so every ending that
+                # splitlines() accepts (\r\n, a lone \r) is made \n first.
+                text = '\n'.join(inst.instructions.splitlines())
+                for line in textwrap.dedent(text).splitlines():
                     if line.strip():
-                        lines.append(f'        {line.strip()}')
+                        lines.append(f'        {line.rstrip()}')
                 lines.append('')  # blank line after each instruction
             parts.append(crlf.join(lines))
 
