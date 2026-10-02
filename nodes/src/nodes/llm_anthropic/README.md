@@ -102,8 +102,9 @@ matters.
 
 Pick a profile and provide an API key — that is the whole configuration for
 most pipelines. The model ID and token limits for named profiles are fixed by
-the profile; only the `custom` profile exposes `model` and `modelTotalTokens`
-directly. `modelSource` records where a custom model definition comes from
+the profile; only the `custom` profile exposes `model`, `modelTotalTokens` and
+`modelOutputTokens` (the reply limit; left empty, the default model's limit
+applies; extended thinking counts against it) directly. `modelSource` records where a custom model definition comes from
 (`manual` or `openrouter`).
 
 ### Extended thinking
@@ -176,6 +177,7 @@ collapsed to a single line.
 | `anthropic.profile` | `string` | **Model**<br/>LLM model | `"claude-sonnet-4-6"` |
 | `extendedThinking` | `boolean` | **Extended thinking**<br/>Enable Anthropic extended thinking (reasoning) for this node. Off by default. Applies to reasoning-capable models on the interactive chat path. | `false` |
 | `model` | `string` | **Model**<br/>Anthropic model |  |
+| `modelOutputTokens` | `integer` | **Output Tokens**<br/>Most tokens the model may write in one reply (at least 1,024). Leave it empty to keep the node's default. Reasoning models count their thinking against this limit: set it well above the reply you expect, or they can spend it all thinking and return nothing. It cannot exceed Tokens; a larger value is lowered to it. |  |
 | `modelTotalTokens` | `number` | **Tokens**<br/>Total Tokens |  |
 
 ## Dependencies

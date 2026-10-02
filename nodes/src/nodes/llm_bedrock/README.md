@@ -78,7 +78,8 @@ to edit those values.
 Select **Custom** to use a Bedrock model not listed above. Provide its full
 provider-prefixed model ID (for example,
 `anthropic.claude-3-7-sonnet-20250219-v1:0`) or an ARN for a custom or
-provisioned model, plus the model's total token limit. Bare model names without a
+provisioned model, plus the model's total token limit and its output limit (4,096
+by default; raise it for models that reason before answering). Bare model names without a
 provider prefix produce a save-time warning. See the
 [Bedrock model IDs reference](https://docs.aws.amazon.com/bedrock/latest/userguide/model-ids.html)
 for available identifiers.
@@ -106,6 +107,7 @@ verify the AWS region first.
 |---|---|---|---|
 | `bedrock.profile` | `string` | **Model**<br/>LLM model | `"meta_llama3_3-70b"` |
 | `model` | `string` | **Model**<br/>Bedrock LLM model name or ARN for custom or provisioned models |  |
+| `modelOutputTokens` | `integer` | **Output Tokens**<br/>Most tokens the model may write in one reply (at least 1,024). Leave it empty to keep the node's default. Reasoning models count their thinking against this limit: set it well above the reply you expect, or they can spend it all thinking and return nothing. It cannot exceed Tokens; a larger value is lowered to it. |  |
 | `modelTotalTokens` | `number` | **Tokens**<br/>Total Tokens |  |
 
 ## Dependencies
