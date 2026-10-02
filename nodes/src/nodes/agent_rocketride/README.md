@@ -32,7 +32,7 @@ The node registers one function under its node-id prefix: `<nodeId>.run_agent`.
 | --- | --- |
 | `<nodeId>.run_agent` | Run this Wave agent for a query and return its result to the calling agent. |
 
-The input must be an object with a required, non-empty string `query`; it may also contain a `context` object. Invalid input raises a `ValueError`. When `context` is supplied, the node serializes it into the agent question as a `RocketRide.agent.tool_context.v1` context entry; serialization errors are ignored. The returned value is the agent result, whose advertised shape is `{content, meta, stack}`. The configured **Agent description**, when non-empty, is prepended to the registered function description that a parent agent sees.
+The input must be an object with a required, non-empty string `query`; it may also contain a `context` object. Invalid input raises a `ValueError`. When `context` is supplied, the node serializes it into the agent question as a `RocketRide.agent.tool_context.v1` context entry; serialization errors are ignored. The returned value is the agent result, whose advertised shape is `{content, meta, stack}`. `meta` holds the framework, agent and run ids, timings and the tool-call count; it carries `stop_reason` when the run reports why it stopped (`error` when it raised, or when the `require_tool_call` guard refused its answer), and no `stop_reason` means none was reported, not that the run finished. The task's control token is never included. The configured **Agent description**, when non-empty, is prepended to the registered function description that a parent agent sees.
 
 ## Configuration
 
