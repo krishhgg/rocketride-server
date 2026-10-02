@@ -229,6 +229,7 @@ Question(
     type: QuestionType = QuestionType.QUESTION,
     filter: DocFilter = None,
     expectJson: bool = False,
+    cachePrefix: bool = False,
     role: str = '',
 )
 ```
@@ -245,6 +246,7 @@ Question(
 | `addDocuments` | `addDocuments(self, documents: Doc \| List[Doc])` | Adds documents for the AI to reference. |
 | `addGoal` | `addGoal(self, goal: str)` | Adds a goal statement for the AI. |
 | `getPrompt` | `getPrompt(self, has_previous_json_failed: bool = False) -> str` | Returns the full prompt (internal). |
+| `cachePrefix` | field, default `False` | Set to `True` when the question will be sent again with only its context, documents, goals or questions changed (an agent loop). A provider with prompt caching (the Anthropic node) may then cache the unchanging start of the prompt: role, instructions, examples and history. Other providers ignore it. |
 
 ## Answer
 
