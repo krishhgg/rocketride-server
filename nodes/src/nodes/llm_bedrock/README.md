@@ -10,7 +10,11 @@ text arriving on the `questions` lane is answered on the `answers` lane.
 
 Uses **langchain-aws (`ChatBedrock`)** on top of **boto3 / botocore**. The chat client is
 created once per pipeline run with a fixed `temperature` of `0`; the output token cap is
-taken from the model's configured output-token limit.
+taken from the model's configured output-token limit. Token counts are estimated at
+about four characters a token, so no tokenizer package is needed. The estimate feeds
+the size warnings and nodes that cut documents to fit the model (such as
+`summarization` and `preprocessor_llm`); text that packs more tokens into fewer
+characters, such as code, may count low.
 
 The node automatically prepends a cross-region inference prefix to the model ID based on
 the configured AWS region: `eu.` for `eu*` regions, `apac.` for `ap*` regions, and `us.`

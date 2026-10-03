@@ -72,7 +72,22 @@ class Chat(ChatBase):
             region=self.region,
             temperature=0,
             max_tokens=self._modelOutputTokens,
+            custom_get_token_ids=self._estimate_token_ids,
         )
 
         # Save our chat class into the bag
         bag['chat'] = self
+
+    @staticmethod
+    def _estimate_token_ids(text: str) -> list:
+        """Estimate token ids at about four characters a token.
+
+        Without this, LangChain counts tokens with the GPT-2 tokenizer from the
+        transformers package, which neither the engine nor this node installs (and
+        which downloads the tokenizer on first use), so on an engine without it
+        every chat failed before it was sent. The count feeds ChatBase's size
+        warnings and, through getTokenCounter, nodes that cut documents to fit the
+        model (summarization, preprocessor_llm). GPT-2 does not match these
+        models' tokenizers either; the Anthropic node uses this same estimate.
+        """
+        return [0] * max(1, (len(text) + 3) // 4)
