@@ -13,7 +13,7 @@ provided" instead of which variable to add.
 
 import pytest
 
-from ai.common.config import check_credential_resolved
+from ai.common.config import UnresolvedCredentialError, check_credential_resolved, warn_if_credential_unresolved
 
 
 @pytest.mark.parametrize('value', ['sk-live-key', '', None, 42, {'nested': '${ROCKETRIDE_X}'}])
@@ -90,13 +90,37 @@ def test_the_service_default_profile_is_the_active_one_when_none_is_set(monkeypa
         check_credential_resolved('llm_nebius', 'apikey', '${ROCKETRIDE_NEBIUS_KEY}', written)
 
 
-def test_a_config_that_cannot_be_read_gets_the_general_message(monkeypatch):
-    # Do not guess "profile default" when the written config cannot be read.
+@pytest.mark.parametrize(
+    'written',
+    [['not', 'a', 'config'], {'profile': 'llama', 'llama': 'not a block'}],
+    ids=['config-not-a-mapping', 'active-block-not-a-mapping'],
+)
+def test_a_config_that_cannot_be_read_gets_the_general_message(written):
+    """Do not guess "profile default" when the written config cannot be read."""
+    with pytest.raises(UnresolvedCredentialError, match='no variable named ROCKETRIDE_NEBIUS_KEY was found'):
+        check_credential_resolved('llm_nebius', 'apikey', '${ROCKETRIDE_NEBIUS_KEY}', written)
+
+
+def test_the_error_is_a_value_error_so_existing_handlers_still_catch_it():
+    with pytest.raises(ValueError):
+        check_credential_resolved('llm_openai', 'apikey', '${ROCKETRIDE_OPENAI_KEY}')
+
+
+def test_a_save_time_check_warns_and_says_to_skip_the_probe(monkeypatch):
     import ai.common.config as config_module
 
-    def broken(_):
-        raise RuntimeError('service catalogue unavailable')
+    warned = []
+    monkeypatch.setattr(config_module, 'warning', warned.append)
 
-    monkeypatch.setattr(config_module, 'getServiceDefinition', broken)
-    with pytest.raises(ValueError, match='no variable named ROCKETRIDE_NEBIUS_KEY was found'):
-        check_credential_resolved('llm_nebius', 'apikey', '${ROCKETRIDE_NEBIUS_KEY}', {'llama': {}})
+    assert warn_if_credential_unresolved('llm_openai', 'apikey', '${ROCKETRIDE_OPENAI_KEY}') is True
+    assert warned and 'no variable named ROCKETRIDE_OPENAI_KEY was found' in warned[0]
+
+
+def test_a_save_time_check_lets_a_filled_key_through(monkeypatch):
+    import ai.common.config as config_module
+
+    warned = []
+    monkeypatch.setattr(config_module, 'warning', warned.append)
+
+    assert warn_if_credential_unresolved('llm_openai', 'apikey', 'sk-live-key') is False
+    assert warned == []

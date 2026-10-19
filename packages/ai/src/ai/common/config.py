@@ -18,6 +18,10 @@ _UNRESOLVED_PLACEHOLDER = re.compile(r'\$\{([^}]*)\}')
 _REDACTED_PLACEHOLDER = '<REDACTED>'
 
 
+class UnresolvedCredentialError(ValueError):
+    """A credential still holds a ``${...}`` or ``<REDACTED>`` placeholder that no variable filled."""
+
+
 def check_credential_resolved(logicalType: str, field: str, value: Any, connConfig: Any = None) -> None:
     """Raise a clear error when a credential still holds a placeholder no variable filled.
 
@@ -37,30 +41,46 @@ def check_credential_resolved(logicalType: str, field: str, value: Any, connConf
             text is resolved), so the message says how to fix that instead.
 
     Raises:
-        ValueError: The value still contains ``${NAME}`` or ``<REDACTED>``.
+        UnresolvedCredentialError: The value still contains ``${NAME}`` or ``<REDACTED>``.
     """
     if not isinstance(value, str):
         return
     unresolved = _UNRESOLVED_PLACEHOLDER.search(value)
     if unresolved:
         name = unresolved.group(1)
-        written = _written_value(logicalType, connConfig, field) if connConfig is not None else None
+        written = None
+        if connConfig is not None:
+            written = _written_value(logicalType, connConfig, field)
         if written is not None and unresolved.group(0) not in written:
-            raise ValueError(
+            raise UnresolvedCredentialError(
                 f'{logicalType}: {field} is the profile default {unresolved.group(0)}, and a profile default '
                 f'is not filled from saved variables. Set {field} to {unresolved.group(0)} in the node settings '
                 'so it is filled from your variable, or enter the key there.'
             )
-        raise ValueError(
+        raise UnresolvedCredentialError(
             f'{logicalType}: {field} is set to {unresolved.group(0)}, but no variable named {name} was found. '
             f'Add {name} to the org, team or user environment variables, or enter the key in the node settings.'
         )
     if _REDACTED_PLACEHOLDER in value:
         # No '*' in these messages: the engine splits error text on it.
-        raise ValueError(
+        raise UnresolvedCredentialError(
             f'{logicalType}: {field} uses a variable whose name does not start with ROCKETRIDE_. '
             'Only variables named ROCKETRIDE_<name> resolve in a pipeline.'
         )
+
+
+def warn_if_credential_unresolved(logicalType: str, field: str, value: Any, connConfig: Any = None) -> bool:
+    """For a save-time check: warn and return True when the credential is an unfilled placeholder.
+
+    The caller returns without its probe request, which would send the placeholder to
+    the provider as the key. Arguments are those of ``check_credential_resolved``.
+    """
+    try:
+        check_credential_resolved(logicalType, field, value, connConfig)
+    except UnresolvedCredentialError as e:
+        warning(str(e))
+        return True
+    return False
 
 
 def _written_value(logicalType: str, connConfig: Any, field: str) -> Optional[str]:
@@ -69,26 +89,29 @@ def _written_value(logicalType: str, connConfig: Any, field: str) -> Optional[st
     A top-level value wins over the active profile's block, and the active profile is
     the config's "profile" or the service's default (as in getNodeConfig). Another
     profile's block is not read: its value is not the one in use. Empty when the
-    pipeline wrote nothing there; None when the config cannot be read, so the caller
-    does not guess where the placeholder came from.
+    pipeline wrote nothing there; None when the config or its active block is not a
+    mapping, so the caller does not guess where the placeholder came from.
     """
-    try:
-        source = IJson.toDict(connConfig)
-        if not isinstance(source, dict):
-            return ''
-        value = source.get(field)
-        if value is None:
-            profile = source.get('profile')
-            if not profile:
-                service = getServiceDefinition(logicalType)
-                profile = ((service or {}).get('preconfig') or {}).get('default')
-            block = source.get(profile) if profile else None
-            value = IJson.toDict(block).get(field) if block is not None else None
-        if value is None:
-            return ''
-        return value if isinstance(value, str) else json.dumps(value, default=str)
-    except Exception:
+    source = IJson.toDict(connConfig)
+    if not isinstance(source, dict):
         return None
+    value = source.get(field)
+    if value is None:
+        profile = source.get('profile')
+        if not profile:
+            service = getServiceDefinition(logicalType) or {}
+            profile = (service.get('preconfig') or {}).get('default')
+        block = {}
+        if profile:
+            block = source.get(profile) or {}
+        if not isinstance(block, dict):
+            return None
+        value = block.get(field)
+    if value is None:
+        return ''
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, default=str)
 
 
 # Fields the catalogue keeps about a profile, which a pipeline never sets. Kept out

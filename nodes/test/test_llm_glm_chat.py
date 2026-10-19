@@ -60,6 +60,7 @@ def _load_glm(monkeypatch, config_overrides: dict | None = None):
     chat_module.ChatBase = ChatBase
     config_module.Config = Config
     config_module.check_credential_resolved = lambda *args, **kwargs: None
+    config_module.warn_if_credential_unresolved = lambda *args, **kwargs: False
     langchain_openai_module.ChatOpenAI = ChatOpenAI
     ai_module.common = common_module
     common_module.chat = chat_module

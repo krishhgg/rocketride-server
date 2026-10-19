@@ -33,7 +33,7 @@ import os
 import re
 from typing import Any, Dict
 
-from ai.common.config import Config, check_credential_resolved
+from ai.common.config import Config, check_credential_resolved, warn_if_credential_unresolved
 from ai.common.transform import IGlobalTransform
 from rocketlib import OPEN_MODE, debug, warning
 
@@ -217,10 +217,7 @@ class IGlobal(IGlobalTransform):
 
             # Do not send a ${...} the engine left unfilled to the server as the key:
             # its reply would say the key is wrong, not which variable is missing.
-            try:
-                check_credential_resolved(self.glb.logicalType, 'apikey', apikey, self.glb.connConfig)
-            except ValueError as e:
-                warning(str(e))
+            if warn_if_credential_unresolved(self.glb.logicalType, 'apikey', apikey, self.glb.connConfig):
                 return
 
             if not INDEX_NAME_RE.fullmatch(index):
@@ -282,10 +279,7 @@ class IGlobal(IGlobalTransform):
                     warning('Password is required when basic auth is enabled')
                     return
                 # An unfilled password is reported as such, and the ping does not send it.
-                try:
-                    check_credential_resolved(self.glb.logicalType, 'password', password)
-                except ValueError as e:
-                    warning(str(e))
+                if warn_if_credential_unresolved(self.glb.logicalType, 'password', password):
                     return
 
             normalized_host = _normalize_opensearch_host(host, use_auth)
