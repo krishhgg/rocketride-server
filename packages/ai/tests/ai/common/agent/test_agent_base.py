@@ -232,7 +232,7 @@ def _say_done_then_narrate(driver, context, _question):
 def test_a_run_that_raises_before_any_status_still_reports_why_it_stopped():
     ii = _FakeIInstance()
     payload = _make_driver(_fail_before_any_status, require_tool_call=False).run_agent(
-        ii, _FakeQuestion(), emit_answers_lane=False
+        ii, _FakeQuestion(), emit_answers_lane=True
     )
 
     assert payload['meta']['stop_reason'] == 'error'
@@ -252,7 +252,7 @@ def test_a_run_that_fails_before_its_context_is_built_still_reports_why_it_stopp
     driver = _make_driver(_call_one_tool, require_tool_call=False)
     driver._instructions = ['be brief']
 
-    payload = driver.run_agent(ii, _BrokenQuestion(), emit_answers_lane=False)
+    payload = driver.run_agent(ii, _BrokenQuestion(), emit_answers_lane=True)
 
     assert payload['meta']['stop_reason'] == 'error'
     assert ii.instance.sse[-1] == ('thinking', {'message': 'The run failed.', 'stop_reason': 'error'})
@@ -260,16 +260,36 @@ def test_a_run_that_fails_before_its_context_is_built_still_reports_why_it_stopp
 
 def test_a_refused_answer_overrides_the_done_status():
     ii = _FakeIInstance()
-    _make_driver(_say_done_then_narrate, require_tool_call=True).run_agent(ii, _FakeQuestion(), emit_answers_lane=False)
+    _make_driver(_say_done_then_narrate, require_tool_call=True).run_agent(ii, _FakeQuestion(), emit_answers_lane=True)
 
     assert [kw['stop_reason'] for _, kw in ii.instance.sse] == ['done', 'error']
 
 
 def test_a_run_that_answers_sends_no_extra_status():
     ii = _FakeIInstance()
-    _make_driver(_call_one_tool, require_tool_call=True).run_agent(ii, _FakeQuestion(), emit_answers_lane=False)
+    _make_driver(_call_one_tool, require_tool_call=True).run_agent(ii, _FakeQuestion(), emit_answers_lane=True)
 
     assert ii.instance.sse == []
+
+
+def test_a_sub_agent_that_fails_leaves_the_stream_to_its_parent():
+    """A sub-agent shares its parent's status stream; its failure is a tool result, not the end."""
+    ii = _FakeIInstance()
+
+    payload = _make_driver(_fail_before_any_status, require_tool_call=False).run_agent(
+        ii, _FakeQuestion(), emit_answers_lane=False
+    )
+
+    assert payload['meta']['stop_reason'] == 'error'
+    assert ii.instance.sse == []
+
+
+def test_a_sub_agent_whose_answer_is_refused_leaves_the_stream_to_its_parent():
+    ii = _FakeIInstance()
+
+    _make_driver(_say_done_then_narrate, require_tool_call=True).run_agent(ii, _FakeQuestion(), emit_answers_lane=False)
+
+    assert [kw['stop_reason'] for _, kw in ii.instance.sse] == ['done']
 
 
 def test_a_failed_status_send_keeps_the_answer(monkeypatch):
