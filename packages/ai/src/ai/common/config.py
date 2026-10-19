@@ -1,4 +1,5 @@
 import json5
+import re
 import sys
 import os
 import difflib
@@ -8,6 +9,45 @@ from rocketlib import getServiceDefinition, IJson, warning
 # Token limits. Several pipeline shapes can hold them (see getNodeConfig), and a
 # value written in two places with two values is worth a warning.
 _LIMIT_FIELDS = ('modelTotalTokens', 'modelOutputTokens')
+
+# A ${...} left in a config value means no variable had that name when the task
+# started (ai.modules.task.pipeline.resolve_pipeline_env keeps unknown ones as-is).
+_UNRESOLVED_PLACEHOLDER = re.compile(r'\$\{([^}]*)\}')
+# What resolve_pipeline_env writes for a ${NAME} outside the ROCKETRIDE_* namespace.
+_REDACTED_PLACEHOLDER = '<REDACTED>'
+
+
+def check_credential_resolved(logicalType: str, field: str, value: Any) -> None:
+    """Raise a clear error when a credential still holds a placeholder no variable filled.
+
+    Without this the placeholder text is sent to the provider as the credential, and
+    the user sees the provider's "invalid API key" reply instead of the missing name.
+    Call it on the effective config value, right where the credential is used, so a
+    node that a run never starts is not checked.
+
+    Args:
+        logicalType: The node's logical type, for the message (e.g. 'llm_openai').
+        field: The config field that holds the credential (e.g. 'apikey').
+        value: The resolved config value. Anything but a string passes.
+
+    Raises:
+        ValueError: The value still contains ``${NAME}`` or ``<REDACTED>``.
+    """
+    if not isinstance(value, str):
+        return
+    unresolved = _UNRESOLVED_PLACEHOLDER.search(value)
+    if unresolved:
+        name = unresolved.group(1)
+        raise ValueError(
+            f'{logicalType}: {field} is set to {unresolved.group(0)}, but no variable named {name} was found. '
+            f'Add {name} to the org, team or user environment variables, or enter the key in the node settings.'
+        )
+    if _REDACTED_PLACEHOLDER in value:
+        # No '*' in these messages: the engine splits error text on it.
+        raise ValueError(
+            f'{logicalType}: {field} uses a variable whose name does not start with ROCKETRIDE_. '
+            'Only variables named ROCKETRIDE_<name> resolve in a pipeline.'
+        )
 
 
 # Fields the catalogue keeps about a profile, which a pipeline never sets. Kept out
