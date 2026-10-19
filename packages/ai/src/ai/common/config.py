@@ -4,7 +4,7 @@ import re
 import sys
 import os
 import difflib
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from rocketlib import getServiceDefinition, IJson, warning
 
 # Token limits. Several pipeline shapes can hold them (see getNodeConfig), and a
@@ -44,7 +44,8 @@ def check_credential_resolved(logicalType: str, field: str, value: Any, connConf
     unresolved = _UNRESOLVED_PLACEHOLDER.search(value)
     if unresolved:
         name = unresolved.group(1)
-        if connConfig is not None and unresolved.group(0) not in _written_value(logicalType, connConfig, field):
+        written = _written_value(logicalType, connConfig, field) if connConfig is not None else None
+        if written is not None and unresolved.group(0) not in written:
             raise ValueError(
                 f'{logicalType}: {field} is the profile default {unresolved.group(0)}, and a profile default '
                 f'is not filled from saved variables. Set {field} to {unresolved.group(0)} in the node settings '
@@ -62,13 +63,14 @@ def check_credential_resolved(logicalType: str, field: str, value: Any, connConf
         )
 
 
-def _written_value(logicalType: str, connConfig: Any, field: str) -> str:
+def _written_value(logicalType: str, connConfig: Any, field: str) -> Optional[str]:
     """What the pipeline wrote for ``field`` where getNodeConfig reads it, as text.
 
     A top-level value wins over the active profile's block, and the active profile is
     the config's "profile" or the service's default (as in getNodeConfig). Another
     profile's block is not read: its value is not the one in use. Empty when the
-    pipeline wrote nothing there or the config cannot be read.
+    pipeline wrote nothing there; None when the config cannot be read, so the caller
+    does not guess where the placeholder came from.
     """
     try:
         source = IJson.toDict(connConfig)
@@ -86,7 +88,7 @@ def _written_value(logicalType: str, connConfig: Any, field: str) -> str:
             return ''
         return value if isinstance(value, str) else json.dumps(value, default=str)
     except Exception:
-        return ''
+        return None
 
 
 # Fields the catalogue keeps about a profile, which a pipeline never sets. Kept out
