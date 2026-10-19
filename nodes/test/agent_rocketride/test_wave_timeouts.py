@@ -352,8 +352,13 @@ def test_waiting_for_a_timed_out_call_is_a_warning_not_an_error(wave, monkeypatc
     """
     release, logged = threading.Event(), {'error': [], 'warning': []}
     monkeypatch.setattr(wave.rocketride_agent, 'error', lambda msg: logged['error'].append(msg))
-    # The run waits for the call only after it logs, so release the call from the log.
-    monkeypatch.setattr(wave.rocketride_agent, 'warning', lambda msg: logged['warning'].append(msg) or release.set())
+
+    def warn_then_release(msg):
+        # The run waits for the call only after it logs, so release the call from the log.
+        logged['warning'].append(msg)
+        release.set()
+
+    monkeypatch.setattr(wave.rocketride_agent, 'warning', warn_then_release)
 
     steps = iter(
         [
