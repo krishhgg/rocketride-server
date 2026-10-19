@@ -67,12 +67,13 @@ class _FakeInner:
     def __init__(self) -> None:
         self.pipeId = 42
         self.written: List[Any] = []
+        self.sse: List[Tuple[Any, Dict[str, Any]]] = []
 
     def writeAnswers(self, answer: Any) -> None:
         self.written.append(answer)
 
-    def sendSSE(self, *args: Any, **kwargs: Any) -> None:
-        pass
+    def sendSSE(self, type: Any, **kwargs: Any) -> None:
+        self.sse.append((type, kwargs))
 
 
 class _FakeIInstance:
@@ -210,6 +211,62 @@ def test_guard_answer_is_emitted_on_the_answers_lane():
     driver.run_agent(ii, _FakeQuestion(), emit_answers_lane=True)
 
     # Even a tripped guard still emits exactly one answer downstream.
+    assert len(ii.instance.written) == 1
+
+
+# ---------------------------------------------------------------------------
+# The last status of a run that ends on an error
+# ---------------------------------------------------------------------------
+
+
+def _fail_before_any_status(_driver, _context, _question):
+    """Like agent_rocketride when verify_tool names no connected tool: it raises first."""
+    raise ValueError("verify_tool 'workspace.compile' is not a connected tool (connected: none)")
+
+
+def _say_done_then_narrate(driver, context, _question):
+    driver.sendSSE(context, 'thinking', message='Generating final answer...', stop_reason='done')
+    return ('I called the weather tool and it is sunny.', {'raw': 'narrated', 'stop_reason': 'done'})
+
+
+def test_a_run_that_raises_before_any_status_still_reports_why_it_stopped():
+    ii = _FakeIInstance()
+    payload = _make_driver(_fail_before_any_status, require_tool_call=False).run_agent(
+        ii, _FakeQuestion(), emit_answers_lane=False
+    )
+
+    assert payload['meta']['stop_reason'] == 'error'
+    assert 'is not a connected tool' in payload['content']
+    assert ii.instance.sse, 'the run sent no status at all'
+    assert ii.instance.sse[-1] == ('thinking', {'message': 'The run failed.', 'stop_reason': 'error'})
+
+
+def test_a_refused_answer_overrides_the_done_status():
+    ii = _FakeIInstance()
+    _make_driver(_say_done_then_narrate, require_tool_call=True).run_agent(ii, _FakeQuestion(), emit_answers_lane=False)
+
+    assert [kw['stop_reason'] for _, kw in ii.instance.sse] == ['done', 'error']
+
+
+def test_a_run_that_answers_sends_no_extra_status():
+    ii = _FakeIInstance()
+    _make_driver(_call_one_tool, require_tool_call=True).run_agent(ii, _FakeQuestion(), emit_answers_lane=False)
+
+    assert ii.instance.sse == []
+
+
+def test_a_failed_status_send_keeps_the_answer():
+    ii = _FakeIInstance()
+
+    def broken_send(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError('pipe closed')
+
+    ii.instance.sendSSE = broken_send
+    payload = _make_driver(_fail_before_any_status, require_tool_call=False).run_agent(
+        ii, _FakeQuestion(), emit_answers_lane=True
+    )
+
+    assert 'is not a connected tool' in payload['content']
     assert len(ii.instance.written) == 1
 
 
