@@ -1,3 +1,8 @@
+# =============================================================================
+# MIT License
+# Copyright (c) 2026 Aparavi Software AG
+# =============================================================================
+
 """Chroma sends its key to a cloud or remote server only, so only then is an unfilled key an error.
 
 The running store reads the profile from ``mode`` or, for a direct configuration,

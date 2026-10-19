@@ -1,3 +1,8 @@
+# =============================================================================
+# MIT License
+# Copyright (c) 2026 Aparavi Software AG
+# =============================================================================
+
 """The save-time probe sends Milvus's token to a cloud server only.
 
 The running store connects to a local server without a token, but the probe used
