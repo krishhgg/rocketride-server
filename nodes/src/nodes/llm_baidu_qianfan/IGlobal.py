@@ -26,7 +26,7 @@ import re
 from typing import Optional
 
 from ai.common.chat import ChatBase
-from ai.common.config import Config, check_credential_resolved
+from ai.common.config import Config, warn_if_credential_unresolved
 from rocketlib import IGlobalBase, OPEN_MODE, warning
 
 
@@ -67,10 +67,7 @@ class IGlobal(IGlobalBase):
 
             # Do not send a ${...} the engine left unfilled to the provider as the key:
             # its reply would say the key is wrong, not which variable is missing.
-            try:
-                check_credential_resolved(self.glb.logicalType, 'apikey', apikey, self.glb.connConfig)
-            except ValueError as e:
-                warning(str(e))
+            if warn_if_credential_unresolved(self.glb.logicalType, 'apikey', apikey, self.glb.connConfig):
                 return
 
             model = config.get('model')

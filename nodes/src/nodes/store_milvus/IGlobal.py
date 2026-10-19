@@ -71,7 +71,9 @@ class IGlobal(StoreGlobalBase):
             # Read config
             host_raw = config.get('host', '').strip()
             # The token goes to a cloud server only: a local server gets none, as in the running store.
-            token = (config.get('apikey') or '').strip() if config.get('mode') != 'local' else ''
+            token = ''
+            if config.get('mode') != 'local':
+                token = (config.get('apikey') or '').strip()
             # Use port exactly as provided by UI (let SDK validate)
             port = config.get('port')
             collection = config.get('collection', '').strip()
