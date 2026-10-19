@@ -31,6 +31,7 @@ from typing import Any, Callable, Dict, List, Tuple
 
 import pytest
 
+import ai.common.agent.agent as agent_module
 from ai.common.agent import AgentBase, AgentContext
 from ai.common.llm_adapter import report_llm_tokens
 from ai.common.utils import parse_bool
@@ -294,8 +295,6 @@ def test_a_sub_agent_whose_answer_is_refused_leaves_the_stream_to_its_parent():
 
 def test_a_failed_status_send_keeps_the_answer(monkeypatch):
     """The answer still goes out, and the lost status is a warning in normal logs."""
-    import ai.common.agent.agent as agent_module
-
     warned: List[str] = []
     monkeypatch.setattr(agent_module, 'warning', warned.append)
     ii = _FakeIInstance()

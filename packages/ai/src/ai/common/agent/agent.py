@@ -130,7 +130,10 @@ class AgentBase(ABC):
         Args:
             iInstance: Node instance (`IInstance`) provided by the engine.
             question: Incoming question object from the questions lane.
-            emit_answers_lane: If True, write the answer JSON to the answers lane.
+            emit_answers_lane: True for a top-level run: write the answer JSON to the
+                answers lane, and end a failed or refused run with an error stop status.
+                False for a sub-agent run (an agent called as another agent's tool), which
+                shares its parent's status stream and returns its answer as a tool result.
 
         Returns:
             The answer JSON payload (same object written to the answers lane).
@@ -502,11 +505,10 @@ class AgentBase(ABC):
 
         Sent through ``iInstance``, which every run context uses as its invoker, so a run
         that fails before its context is built still reports why it stopped. Best effort:
-        the run's answer is already built, and a failed send must not replace it.
+        a failed send is logged and must not cost the run its answer.
         """
         try:
-            if iInstance.instance:
-                iInstance.instance.sendSSE('thinking', message=message, stop_reason='error')
+            iInstance.instance.sendSSE('thinking', message=message, stop_reason='error')
         except Exception as exc:
             warning(f'agent base stop status not sent: {type(exc).__name__}: {exc}')
 
