@@ -18,7 +18,7 @@ import json
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Union
 
-from rocketlib import debug, error
+from rocketlib import debug, error, warning
 from ai.common.schema import Answer, Question
 from ai.common.config import Config
 from ai.common.llm_adapter import turn_usage
@@ -501,7 +501,7 @@ class AgentBase(ABC):
         try:
             self.sendSSE(context, 'thinking', message=message, stop_reason='error')
         except Exception as exc:
-            debug(f'agent base stop status not sent: {type(exc).__name__}: {exc}')
+            warning(f'agent base stop status not sent: {type(exc).__name__}: {exc}')
 
     def _agent_id(self, pSelf: Any) -> str:
         """Return the logical agent identifier used in answer metadata."""

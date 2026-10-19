@@ -255,7 +255,12 @@ def test_a_run_that_answers_sends_no_extra_status():
     assert ii.instance.sse == []
 
 
-def test_a_failed_status_send_keeps_the_answer():
+def test_a_failed_status_send_keeps_the_answer(monkeypatch):
+    """The answer still goes out, and the lost status is a warning in normal logs."""
+    import ai.common.agent.agent as agent_module
+
+    warned: List[str] = []
+    monkeypatch.setattr(agent_module, 'warning', warned.append)
     ii = _FakeIInstance()
 
     def broken_send(*_args: Any, **_kwargs: Any) -> None:
@@ -268,6 +273,7 @@ def test_a_failed_status_send_keeps_the_answer():
 
     assert 'is not a connected tool' in payload['content']
     assert len(ii.instance.written) == 1
+    assert warned == ['agent base stop status not sent: RuntimeError: pipe closed']
 
 
 # ---------------------------------------------------------------------------
