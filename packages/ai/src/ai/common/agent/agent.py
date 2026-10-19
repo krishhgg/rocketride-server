@@ -274,15 +274,20 @@ class AgentBase(ABC):
                     ],
                 }
                 # The run's last status may have said "done"; the refusal must be the last word.
-                self._send_stop_status(iInstance, 'Answer refused: no tool was called.')
+                # Only a top-level run ends the stream: a sub-agent shares its parent's, and
+                # its refusal is the parent's tool result, not the end of the parent's run.
+                if emit_answers_lane:
+                    self._send_stop_status(iInstance, 'Answer refused: no tool was called.')
 
             except Exception as e:
                 error_type = type(e).__name__
                 error_message = str(e)
                 error(f'agent base _run failed run_id={run_id} type={error_type} message={error_message}')
                 # A driver can raise before it sends any status (agent_rocketride checks its
-                # verify_tool first), so this exit must report its stop reason itself.
-                self._send_stop_status(iInstance, 'The run failed.')
+                # verify_tool first), so this exit must report its stop reason itself. A
+                # sub-agent does not: its failure is its parent's tool result.
+                if emit_answers_lane:
+                    self._send_stop_status(iInstance, 'The run failed.')
                 ended_at = now_iso()
                 answer_payload = {
                     'content': error_message or f'{error_type} (no message)',
