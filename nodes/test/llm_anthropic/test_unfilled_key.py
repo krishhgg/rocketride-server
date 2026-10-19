@@ -1,3 +1,8 @@
+# =============================================================================
+# MIT License
+# Copyright (c) 2026 Aparavi Software AG
+# =============================================================================
+
 """An Anthropic key left as an unfilled ${ROCKETRIDE_...} names the missing variable.
 
 The node checks that the key starts with sk-ant before ChatBase runs, so the
