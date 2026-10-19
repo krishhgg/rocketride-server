@@ -88,3 +88,15 @@ def test_the_service_default_profile_is_the_active_one_when_none_is_set(monkeypa
     written = {'llama': {'apikey': '${ROCKETRIDE_NEBIUS_KEY}'}}
     with pytest.raises(ValueError, match='no variable named ROCKETRIDE_NEBIUS_KEY was found'):
         check_credential_resolved('llm_nebius', 'apikey', '${ROCKETRIDE_NEBIUS_KEY}', written)
+
+
+def test_a_config_that_cannot_be_read_gets_the_general_message(monkeypatch):
+    # Do not guess "profile default" when the written config cannot be read.
+    import ai.common.config as config_module
+
+    def broken(_):
+        raise RuntimeError('service catalogue unavailable')
+
+    monkeypatch.setattr(config_module, 'getServiceDefinition', broken)
+    with pytest.raises(ValueError, match='no variable named ROCKETRIDE_NEBIUS_KEY was found'):
+        check_credential_resolved('llm_nebius', 'apikey', '${ROCKETRIDE_NEBIUS_KEY}', {'llama': {}})
