@@ -154,10 +154,12 @@ class StoreGlobalBase(IGlobalTransform, ABC):
         raw_allow_write = cfg.get('allow_write') if hasattr(cfg, 'get') else None
         self.allow_write = parse_bool(raw_allow_write, default=type(self).allow_write)
 
+        # A key left as an unfilled ${ROCKETRIDE_...} fails here, before the driver sends it.
+        self._check_credentials(cfg, connConfig)
+
         # Open the driver's store, then wire an optional embedder for the tool path.
         # Pass the raw connConfig, not the merged cfg above: each driver's Store
         # re-resolves it via Config.getNodeConfig, so the profile merge stays in one place.
-        self._check_credentials(cfg, connConfig)
         self.store = self._open_store(self.glb.logicalType, connConfig, bag)
         self._wire_embedding(connConfig, bag)
 
