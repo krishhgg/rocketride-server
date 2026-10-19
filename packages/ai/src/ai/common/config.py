@@ -31,9 +31,10 @@ def check_credential_resolved(logicalType: str, field: str, value: Any, connConf
         field: The config field that holds the credential (e.g. 'apikey').
         value: The resolved config value. Anything but a string passes.
         connConfig: The node's config as the pipeline wrote it, when known. A
-            placeholder that is not in it came from a profile default, which the
-            task does not fill from saved variables (only the pipeline's own text
-            is resolved), so the message says how to fix that instead.
+            placeholder that the pipeline did not write for this field (top level,
+            or in the active profile's block) came from a profile default, which
+            the task does not fill from saved variables (only the pipeline's own
+            text is resolved), so the message says how to fix that instead.
 
     Raises:
         ValueError: The value still contains ``${NAME}`` or ``<REDACTED>``.
@@ -43,7 +44,7 @@ def check_credential_resolved(logicalType: str, field: str, value: Any, connConf
     unresolved = _UNRESOLVED_PLACEHOLDER.search(value)
     if unresolved:
         name = unresolved.group(1)
-        if connConfig is not None and unresolved.group(0) not in _config_text(connConfig):
+        if connConfig is not None and unresolved.group(0) not in _written_value(logicalType, connConfig, field):
             raise ValueError(
                 f'{logicalType}: {field} is the profile default {unresolved.group(0)}, and a profile default '
                 f'is not filled from saved variables. Set {field} to {unresolved.group(0)} in the node settings '
@@ -61,10 +62,29 @@ def check_credential_resolved(logicalType: str, field: str, value: Any, connConf
         )
 
 
-def _config_text(connConfig: Any) -> str:
-    """The node config as text, to look for a placeholder in it. Empty when it cannot be read."""
+def _written_value(logicalType: str, connConfig: Any, field: str) -> str:
+    """What the pipeline wrote for ``field`` where getNodeConfig reads it, as text.
+
+    A top-level value wins over the active profile's block, and the active profile is
+    the config's "profile" or the service's default (as in getNodeConfig). Another
+    profile's block is not read: its value is not the one in use. Empty when the
+    pipeline wrote nothing there or the config cannot be read.
+    """
     try:
-        return json.dumps(IJson.toDict(connConfig), default=str)
+        source = IJson.toDict(connConfig)
+        if not isinstance(source, dict):
+            return ''
+        value = source.get(field)
+        if value is None:
+            profile = source.get('profile')
+            if not profile:
+                service = getServiceDefinition(logicalType)
+                profile = ((service or {}).get('preconfig') or {}).get('default')
+            block = source.get(profile) if profile else None
+            value = IJson.toDict(block).get(field) if block is not None else None
+        if value is None:
+            return ''
+        return value if isinstance(value, str) else json.dumps(value, default=str)
     except Exception:
         return ''
 
