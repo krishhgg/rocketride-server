@@ -241,6 +241,23 @@ def test_a_run_that_raises_before_any_status_still_reports_why_it_stopped():
     assert ii.instance.sse[-1] == ('thinking', {'message': 'The run failed.', 'stop_reason': 'error'})
 
 
+def test_a_run_that_fails_before_its_context_is_built_still_reports_why_it_stopped():
+    """The status goes through the invoker, which exists before the run context does."""
+
+    class _BrokenQuestion(_FakeQuestion):
+        def addInstruction(self, *args: Any, **kwargs: Any) -> None:
+            raise ValueError('instruction rejected')
+
+    ii = _FakeIInstance()
+    driver = _make_driver(_call_one_tool, require_tool_call=False)
+    driver._instructions = ['be brief']
+
+    payload = driver.run_agent(ii, _BrokenQuestion(), emit_answers_lane=False)
+
+    assert payload['meta']['stop_reason'] == 'error'
+    assert ii.instance.sse[-1] == ('thinking', {'message': 'The run failed.', 'stop_reason': 'error'})
+
+
 def test_a_refused_answer_overrides_the_done_status():
     ii = _FakeIInstance()
     _make_driver(_say_done_then_narrate, require_tool_call=True).run_agent(ii, _FakeQuestion(), emit_answers_lane=False)
