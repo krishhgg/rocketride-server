@@ -344,3 +344,69 @@ def test_managed_driver_tools_can_be_exposed_through_config(monkeypatch):
     managed.glb = SimpleNamespace(logicalType='managedstore', connConfig={})
     managed.beginGlobal()
     assert managed.expose_tools is True
+
+
+# ---------------------------------------------------------------------------
+# A credential still written as an unfilled ${ROCKETRIDE_...}
+# ---------------------------------------------------------------------------
+
+
+class _KeyedGlobal(_TestableGlobal):
+    """A driver that sends ``apikey`` to its server."""
+
+    credential_fields = ('apikey',)
+
+    def __init__(self, store):
+        super().__init__(store)
+        self.probed = False
+
+    def _probe_connection(self, config) -> None:
+        self.probed = True
+
+
+def _keyed(conn_config):
+    g = _KeyedGlobal(store=_FakeStore())
+    g.IEndpoint = SimpleNamespace(endpoint=SimpleNamespace(openMode=OPEN_MODE.SOURCE, bag={}))
+    g.glb = SimpleNamespace(logicalType='teststore', connConfig=conn_config)
+    g._conn_config = conn_config
+    return g
+
+
+def test_an_unfilled_key_stops_the_store_before_it_opens(monkeypatch):
+    config = {'apikey': '${ROCKETRIDE_QDRANT_KEY}'}
+    _patch_config(monkeypatch, config)
+    g = _keyed(config)
+
+    with pytest.raises(ValueError, match='no variable named ROCKETRIDE_QDRANT_KEY was found'):
+        g.beginGlobal()
+    assert not g.opened, 'the driver opened a connection with the placeholder as its key'
+
+
+def test_an_unfilled_key_is_reported_at_save_time_without_a_probe(monkeypatch, warnings):
+    config = {'apikey': '${ROCKETRIDE_QDRANT_KEY}'}
+    _patch_config(monkeypatch, config)
+    g = _keyed(config)
+
+    g.validateConfig()
+
+    assert not g.probed, 'the probe sent the placeholder to the server'
+    assert any('no variable named ROCKETRIDE_QDRANT_KEY was found' in w for w in warnings)
+
+
+@pytest.mark.parametrize('config', [{'apikey': 'a-real-key'}, {'apikey': ''}, {}])
+def test_a_filled_empty_or_absent_key_opens_the_store(monkeypatch, config):
+    _patch_config(monkeypatch, config)
+    g = _keyed(config)
+
+    g.beginGlobal()
+
+    assert g.opened
+
+
+def test_a_driver_without_credential_fields_is_not_checked(monkeypatch):
+    _patch_config(monkeypatch, {'apikey': '${ROCKETRIDE_NOT_SENT}'})
+    g = _make()
+
+    g.beginGlobal()
+
+    assert g.opened
