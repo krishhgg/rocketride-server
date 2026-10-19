@@ -65,7 +65,7 @@ class OpenAIEmbeddingWrapper(EmbeddingBase):
 
         # Get the model from our section
         openai_api_key = config.get('apikey')
-        check_credential_resolved(provider, 'apikey', openai_api_key)
+        check_credential_resolved(provider, 'apikey', openai_api_key, connConfig)
         self._model = config.get('model')
 
         self._embedding = OpenAIEmbeddings(openai_api_key=openai_api_key, model=self._model)

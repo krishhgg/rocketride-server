@@ -1,3 +1,4 @@
+import json
 import json5
 import re
 import sys
@@ -17,7 +18,7 @@ _UNRESOLVED_PLACEHOLDER = re.compile(r'\$\{([^}]*)\}')
 _REDACTED_PLACEHOLDER = '<REDACTED>'
 
 
-def check_credential_resolved(logicalType: str, field: str, value: Any) -> None:
+def check_credential_resolved(logicalType: str, field: str, value: Any, connConfig: Any = None) -> None:
     """Raise a clear error when a credential still holds a placeholder no variable filled.
 
     Without this the placeholder text is sent to the provider as the credential, and
@@ -29,6 +30,10 @@ def check_credential_resolved(logicalType: str, field: str, value: Any) -> None:
         logicalType: The node's logical type, for the message (e.g. 'llm_openai').
         field: The config field that holds the credential (e.g. 'apikey').
         value: The resolved config value. Anything but a string passes.
+        connConfig: The node's config as the pipeline wrote it, when known. A
+            placeholder that is not in it came from a profile default, which the
+            task does not fill from saved variables (only the pipeline's own text
+            is resolved), so the message says how to fix that instead.
 
     Raises:
         ValueError: The value still contains ``${NAME}`` or ``<REDACTED>``.
@@ -38,6 +43,12 @@ def check_credential_resolved(logicalType: str, field: str, value: Any) -> None:
     unresolved = _UNRESOLVED_PLACEHOLDER.search(value)
     if unresolved:
         name = unresolved.group(1)
+        if connConfig is not None and unresolved.group(0) not in _config_text(connConfig):
+            raise ValueError(
+                f'{logicalType}: {field} is the profile default {unresolved.group(0)}, and a profile default '
+                f'is not filled from saved variables. Set {field} to {unresolved.group(0)} in the node settings '
+                'so it is filled from your variable, or enter the key there.'
+            )
         raise ValueError(
             f'{logicalType}: {field} is set to {unresolved.group(0)}, but no variable named {name} was found. '
             f'Add {name} to the org, team or user environment variables, or enter the key in the node settings.'
@@ -48,6 +59,14 @@ def check_credential_resolved(logicalType: str, field: str, value: Any) -> None:
             f'{logicalType}: {field} uses a variable whose name does not start with ROCKETRIDE_. '
             'Only variables named ROCKETRIDE_<name> resolve in a pipeline.'
         )
+
+
+def _config_text(connConfig: Any) -> str:
+    """The node config as text, to look for a placeholder in it. Empty when it cannot be read."""
+    try:
+        return json.dumps(IJson.toDict(connConfig), default=str)
+    except Exception:
+        return ''
 
 
 # Fields the catalogue keeps about a profile, which a pipeline never sets. Kept out

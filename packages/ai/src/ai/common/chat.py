@@ -118,7 +118,7 @@ class ChatBase:
 
         # A key still written as ${ROCKETRIDE_...} would go to the provider as the key,
         # and the user would see an "invalid API key" reply instead of the missing name.
-        check_credential_resolved(provider, 'apikey', config.get('apikey'))
+        check_credential_resolved(provider, 'apikey', config.get('apikey'), connConfig)
 
         # Extract model configuration - these are the core settings that control
         # how the chat driver behaves with respect to token limits
