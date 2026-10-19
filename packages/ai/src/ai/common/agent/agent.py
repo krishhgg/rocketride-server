@@ -278,7 +278,7 @@ class AgentBase(ABC):
                 error_type = type(e).__name__
                 # The answer is shown to the user: no engine source path. The log keeps it.
                 error_message = error_text(e)
-                error(f'agent base _run failed run_id={run_id} type={error_type} message={e}')
+                error(f'agent base _run failed run_id={run_id} type={error_type} message={safe_str(e)}')
                 ended_at = now_iso()
                 answer_payload = {
                     'content': error_message or f'{error_type} (no message)',
