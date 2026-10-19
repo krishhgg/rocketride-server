@@ -20,6 +20,7 @@ _MOD_PATH = os.path.join(
 
 
 def _chat(monkeypatch, apikey):
+    """Build the Anthropic node's Chat over a config whose key is ``apikey``."""
     config = {'model': 'claude-sonnet-4-6', 'apikey': apikey, 'modelTotalTokens': 200000, 'modelOutputTokens': 8192}
     monkeypatch.setattr(Config, 'getNodeConfig', staticmethod(lambda *a, **k: dict(config)))
     stub = types.ModuleType('langchain_anthropic')
@@ -32,10 +33,12 @@ def _chat(monkeypatch, apikey):
 
 
 def test_an_unfilled_key_names_the_missing_variable(monkeypatch):
+    """The placeholder fails with the variable's name, before the sk-ant format check."""
     with pytest.raises(ValueError, match='no variable named ROCKETRIDE_ANTHROPIC_KEY was found'):
         _chat(monkeypatch, '${ROCKETRIDE_ANTHROPIC_KEY}')
 
 
 def test_a_key_in_the_wrong_format_still_says_so(monkeypatch):
+    """A real key that is not an Anthropic key still gets the format message."""
     with pytest.raises(ValueError, match='Invalid Anthropic API key format'):
         _chat(monkeypatch, 'not-an-anthropic-key')
