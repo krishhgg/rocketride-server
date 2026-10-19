@@ -274,7 +274,7 @@ class AgentBase(ABC):
                     ],
                 }
                 # The run's last status may have said "done"; the refusal must be the last word.
-                self._send_stop_status(context, 'Answer refused: no tool was called.')
+                self._send_stop_status(iInstance, 'Answer refused: no tool was called.')
 
             except Exception as e:
                 error_type = type(e).__name__
@@ -282,7 +282,7 @@ class AgentBase(ABC):
                 error(f'agent base _run failed run_id={run_id} type={error_type} message={error_message}')
                 # A driver can raise before it sends any status (agent_rocketride checks its
                 # verify_tool first), so this exit must report its stop reason itself.
-                self._send_stop_status(context, 'The run failed.')
+                self._send_stop_status(iInstance, 'The run failed.')
                 ended_at = now_iso()
                 answer_payload = {
                     'content': error_message or f'{error_type} (no message)',
@@ -492,14 +492,16 @@ class AgentBase(ABC):
         if context and context.invoker and context.invoker.instance:
             context.invoker.instance.sendSSE(type, **data)
 
-    def _send_stop_status(self, context: Optional[AgentContext], message: str) -> None:
+    def _send_stop_status(self, iInstance: Any, message: str) -> None:
         """Send the last status of a run that ended on an error, with ``stop_reason='error'``.
 
-        Best effort: the run's answer is already built, and a failed send must not replace it.
-        Does nothing when the run failed before its context was built.
+        Sent through ``iInstance``, which every run context uses as its invoker, so a run
+        that fails before its context is built still reports why it stopped. Best effort:
+        the run's answer is already built, and a failed send must not replace it.
         """
         try:
-            self.sendSSE(context, 'thinking', message=message, stop_reason='error')
+            if iInstance.instance:
+                iInstance.instance.sendSSE('thinking', message=message, stop_reason='error')
         except Exception as exc:
             warning(f'agent base stop status not sent: {type(exc).__name__}: {exc}')
 
