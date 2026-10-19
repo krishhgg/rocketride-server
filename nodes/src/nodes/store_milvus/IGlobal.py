@@ -26,7 +26,7 @@
 # ------------------------------------------------------------------------------
 import os
 import re
-from typing import Any, Dict
+from typing import Any, Dict, List, Tuple
 
 from ai.common.store import StoreGlobalBase
 from rocketlib import warning
@@ -36,6 +36,12 @@ class IGlobal(StoreGlobalBase):
     """Global interface for the Milvus node."""
 
     serverName: str = 'milvus'
+
+    def _credentials(self, config: Dict[str, Any]) -> List[Tuple[str, Any]]:
+        """The token goes to a cloud or remote server only, never to a local one."""
+        if config.get('mode') == 'local':
+            return []
+        return [('apikey', config.get('apikey'))]
 
     # Precompiled rules for Milvus collection names
     NAME_PATTERN = re.compile(r'^[A-Za-z_][A-Za-z0-9_]{0,254}$')

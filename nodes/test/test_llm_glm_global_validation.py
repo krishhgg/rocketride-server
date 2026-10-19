@@ -102,6 +102,7 @@ def _load_iglobal(monkeypatch, error_factory=None, config_overrides: dict | None
 
     chat_module.ChatBase = ChatBase
     config_module.Config = Config
+    config_module.check_credential_resolved = lambda *args, **kwargs: None
     rocketlib_module.IGlobalBase = IGlobalBase
     rocketlib_module.warning = warnings.append
     openai_module.OpenAI = OpenAI

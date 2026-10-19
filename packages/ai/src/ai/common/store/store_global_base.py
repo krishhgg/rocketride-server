@@ -37,11 +37,11 @@ worked example.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from rocketlib import OPEN_MODE, warning
 
-from ai.common.config import Config
+from ai.common.config import Config, check_credential_resolved
 from ai.common.transform import IGlobalTransform
 
 from .document_store import DocumentStoreBase
@@ -82,6 +82,22 @@ class StoreGlobalBase(IGlobalTransform, ABC):
         key that tracks which objects a given store has already ingested.
         """
 
+    # The config fields holding what the driver sends its server to sign in.
+    # A driver that uses one in some modes only overrides ``_credentials``.
+    credential_fields: Tuple[str, ...] = ()
+
+    def _credentials(self, config: Dict[str, Any]) -> List[Tuple[str, Any]]:
+        """The credentials this config has the driver send, as ``(field, value)``."""
+        return [(field, config.get(field)) for field in self.credential_fields]
+
+    def _check_credentials(self, config: Dict[str, Any], connConfig: Any) -> None:
+        """Raise when a credential is still a ${...} that no saved variable filled.
+
+        Sent as is, the server's "unauthorized" reply would not say which variable is missing.
+        """
+        for field, value in self._credentials(config):
+            check_credential_resolved(self.glb.logicalType, field, value, connConfig)
+
     @abstractmethod
     def _probe_connection(self, config: Dict[str, Any]) -> None:
         """Save-time connectivity/format probe. Report problems with ``warning()``.
@@ -111,6 +127,9 @@ class StoreGlobalBase(IGlobalTransform, ABC):
         resolved_name = cfg.get('serverName') if hasattr(cfg, 'get') else None
         if isinstance(resolved_name, str) and resolved_name.strip():
             self.serverName = resolved_name.strip()
+
+        # A key left as an unfilled ${ROCKETRIDE_...} fails here, before the driver sends it.
+        self._check_credentials(cfg, connConfig)
 
         # Open the driver's store, then wire an optional embedder for the tool path.
         # Pass the raw connConfig, not the merged cfg above: each driver's Store
@@ -174,6 +193,8 @@ class StoreGlobalBase(IGlobalTransform, ABC):
         """Save-time validation: probe the server so the user sees errors immediately."""
         try:
             config = Config.getNodeConfig(self.glb.logicalType, self.glb.connConfig)
+            # An unfilled credential is reported as such, and the probe does not send it.
+            self._check_credentials(config, self.glb.connConfig)
             self._probe_connection(config)
         except Exception as e:
             warning(str(e))

@@ -25,7 +25,7 @@ import os
 import re
 from typing import Optional
 from rocketlib import IGlobalBase, warning
-from ai.common.config import Config
+from ai.common.config import Config, check_credential_resolved
 from ai.common.chat import ChatBase
 
 
@@ -59,6 +59,15 @@ class IGlobal(IGlobalBase):
             # Get config
             config = Config.getNodeConfig(self.glb.logicalType, self.glb.connConfig)
             apikey = config.get('apikey')
+
+            # Do not send a ${...} the engine left unfilled to the provider as the key:
+            # its reply would say the key is wrong, not which variable is missing.
+            try:
+                check_credential_resolved(self.glb.logicalType, 'apikey', apikey, self.glb.connConfig)
+            except ValueError as e:
+                warning(str(e))
+                return
+
             model = config.get('model')
 
             # Cloud models we validate: deepseek-reasoner, deepseek-chat
