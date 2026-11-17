@@ -34,7 +34,7 @@ Running tests:
 
 # Diagnostic only, not for merging: armed first, so a worker that hangs in a
 # later import is still seen (see _hc_diag_hang).
-from ._hc_diag_hang import pytest_collection_finish  # noqa: F401
+from ._hc_diag_hang import pytest_collection_finish, pytest_sessionstart  # noqa: F401
 
 import os
 import asyncio
