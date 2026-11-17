@@ -12,14 +12,22 @@
 //   node:test  <dir>/<task>.nodetest.xml  JUnit XML from node's file reporter
 //   Catch2     <dir>/<task>.catch2.xml    Catch2's XML reporter (results per test case)
 //   vitest     <dir>/<task>.vitest.xml    JUnit XML from vitest's junit reporter
+//   Maven      <dir>/<task>.surefire.xml  Surefire's JUnit XML, one file for the task
 // engtest takes Catch2 flags only as the words of its --testArgs option, so
 // its reporter flags go inside that one argument.
+// Surefire has no flag for its report folder. For `mvn test` the module only
+// notes where Surefire writes and when the command started. The workflow step
+// `Collect test reports` then runs this file with `collect`, which joins the
+// TEST-*.xml files written since that time into the task's one report.
 // Console output stays as it was. With the variable unset nothing changes.
 
 const fs = require('fs');
 const path = require('path');
 
 const CATCH2_BINARIES = new Set(['aptest', 'engtest', 'nodetest']);
+const BUILD_DIR_FLAG = '-Drocketride.build.dir=';
+// Notes for `collect`. upload-artifact leaves out folders that start with a dot.
+const PENDING = '.pending';
 const written = new Map();
 
 /** File path for one suite's report. A task that runs twice gets `.2`, `.3`. */
@@ -68,6 +76,9 @@ function detect(command, args, cwd) {
 		if (!/^vitest( run)?( |$)/.test(script)) return null;
 		return [script, ...args].some((a) => /--reporter|--outputFile/.test(a)) ? null : 'vitest';
 	}
+	if (exe === 'mvn') {
+		return args.includes('test') ? 'surefire' : null;
+	}
 	if (CATCH2_BINARIES.has(exe)) {
 		const words = args.flatMap((a) => (a.startsWith('--testArgs=') ? a.slice(11).split(/\s+/) : [a]));
 		return words.some((a) => a === '--reporter' || a === '-r') ? null : 'catch2';
@@ -95,6 +106,15 @@ function withTestReport(command, args, task, cwd) {
 	const suite = task?._hillclimbSuite || task?._logModule || `unnamed-${kind}`;
 	fs.mkdirSync(dir, { recursive: true });
 
+	if (kind === 'surefire') {
+		const build = list.find((a) => a.startsWith(BUILD_DIR_FLAG));
+		const target = build ? build.slice(BUILD_DIR_FLAG.length) : path.join(cwd || '.', 'target');
+		const to = reportPath(dir, suite, 'surefire.xml');
+		const note = { from: path.join(target, 'surefire-reports'), since: Date.now(), to };
+		fs.mkdirSync(path.join(dir, PENDING), { recursive: true });
+		fs.writeFileSync(path.join(dir, PENDING, `${path.basename(to)}.json`), JSON.stringify(note));
+		return args;
+	}
 	if (kind === 'pytest') {
 		return [...list, `--junitxml=${reportPath(dir, suite, 'pytest.xml')}`, '-o', 'junit_family=xunit1'];
 	}
@@ -139,4 +159,68 @@ function withTestReport(command, args, task, cwd) {
 	return out;
 }
 
-module.exports = { withTestReport };
+/** Write the JUnit files as one document: every file's suites under a single <testsuites>. */
+function joinJUnit(files, to) {
+	const parts = files.map((file) =>
+		fs
+			.readFileSync(file, 'utf8')
+			.replace(/^\uFEFF/, '')
+			.replace(/^\s*<\?xml[^>]*\?>/, '')
+			.replace(/^\s*<testsuites\b[^>]*>/, '')
+			.replace(/<\/testsuites>\s*$/, '')
+			.trim()
+	);
+	fs.writeFileSync(to, `<?xml version="1.0" encoding="UTF-8"?>\n<testsuites>\n${parts.join('\n')}\n</testsuites>\n`);
+}
+
+/** Surefire's TEST-*.xml files in a folder, written at or after a time. */
+function surefireFiles(from, since) {
+	if (!fs.existsSync(from)) return [];
+	return fs
+		.readdirSync(from)
+		.filter((name) => /^TEST-.*\.xml$/.test(name))
+		.sort()
+		.map((name) => path.join(from, name))
+		.filter((file) => fs.statSync(file).mtimeMs >= since);
+}
+
+/**
+ * Finish the report folder after the test steps, then list what it holds.
+ *
+ * A problem with one report is printed as a warning and never fails the step.
+ *
+ * @param {string} dir - The report folder (HILLCLIMB_REPORT_DIR)
+ */
+function collectReports(dir) {
+	if (!dir || !fs.existsSync(dir)) {
+		console.log('No report folder, nothing to collect');
+		return;
+	}
+	const pending = path.join(dir, PENDING);
+	const notes = fs.existsSync(pending) ? fs.readdirSync(pending).sort() : [];
+	for (const name of notes) {
+		try {
+			const note = JSON.parse(fs.readFileSync(path.join(pending, name), 'utf8'));
+			// Two seconds of slack for file systems that round a file's time down.
+			const files = surefireFiles(note.from, note.since - 2000);
+			console.log(`${path.basename(note.to)}: ${files.length} Surefire file(s) in ${note.from}`);
+			if (files.length) joinJUnit(files, note.to);
+		} catch (err) {
+			console.log(`::warning::could not collect ${name}: ${err.message}`);
+		}
+	}
+	fs.rmSync(pending, { recursive: true, force: true });
+	for (const name of fs.readdirSync(dir).sort()) {
+		console.log(`${String(fs.statSync(path.join(dir, name)).size).padStart(10)}  ${name}`);
+	}
+}
+
+if (require.main === module) {
+	if (process.argv[2] !== 'collect') {
+		console.error('Usage: node scripts/lib/hillclimb-reports.js collect');
+		process.exit(2);
+	}
+	collectReports(process.env.HILLCLIMB_REPORT_DIR);
+}
+
+module.exports = { withTestReport, collectReports };

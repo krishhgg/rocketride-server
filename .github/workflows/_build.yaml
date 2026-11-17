@@ -354,6 +354,15 @@ jobs:
         if: matrix.platform == 'ubuntu' && inputs.codeql == false && inputs.test && (inputs.test_targets == 'test' || contains(inputs.test_targets, 'nodes:test'))
         run: RR_TEST_AGE_DSN="$RR_TEST_AGE_1_6_DSN" ./dist/server/engine -m pytest nodes/test/test_rocketride_graph_live.py -v --junitxml="$RUNNER_TEMP/hillclimb-reports/nodes-graph-age-1-6.pytest.xml" -o junit_family=xunit1 # HILLCLIMB-HARNESS
 
+      # Surefire writes parse:test-jar's results under build/, with no flag to move them. # HILLCLIMB-HARNESS
+      # This copies them into the report folder as one file, only if the task ran. # HILLCLIMB-HARNESS
+      - name: Collect test reports # HILLCLIMB-HARNESS
+        if: ${{ !cancelled() && inputs.codeql == false && inputs.test }} # HILLCLIMB-HARNESS
+        shell: bash # HILLCLIMB-HARNESS
+        env: # HILLCLIMB-HARNESS
+          HILLCLIMB_REPORT_DIR: ${{ runner.temp }}/hillclimb-reports # HILLCLIMB-HARNESS
+        run: node scripts/lib/hillclimb-reports.js collect # HILLCLIMB-HARNESS
+
       # One structured report per test suite (scripts/lib/hillclimb-reports.js). # HILLCLIMB-HARNESS
       - name: Upload test reports # HILLCLIMB-HARNESS
         if: ${{ !cancelled() && inputs.codeql == false && inputs.test }} # HILLCLIMB-HARNESS
