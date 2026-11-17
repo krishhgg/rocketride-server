@@ -1,0 +1,6 @@
+HILLCLIMB-HARNESS probe file for experiment A0 of the CI hill climb.
+
+The builder stages everything under packages/ai/src/ai into dist/server/ai,
+and the engine cache archive carries that folder. A0 deletes this file on a
+PR branch and checks whether a build that downloads the cached engine still
+has dist/server/ai/hillclimb_probe.txt. Fork only. Leave it out of upstream.
