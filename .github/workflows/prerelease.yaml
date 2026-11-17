@@ -366,7 +366,10 @@ jobs:
                 what: 'The prerelease run',
                 marker: `<!-- prerelease-failure-alert${suffix} -->`,
                 jobs: ['init', 'build', 'cleanup-prereleases', 'prerelease', 'docker'],
-                bad: ['failure', 'cancelled'],
+                // Anything but success or skipped. Not a list of bad results: a
+                // build with a job GitHub gave no runner ends as `abandoned`,
+                // and a list of failure and cancelled read that as green.
+                bad: (result) => !['success', 'skipped'].includes(result),
                 counts: !cacheOnly,
                 recovered: true,
                 why: 'Jobs that passed still published, so tags and prereleases can look current while an artifact (for example the Docker image) is stale.',
@@ -379,7 +382,7 @@ jobs:
                 marker: `<!-- engine-cache-failure-alert${suffix} -->`,
                 jobs: ['engine-cache'],
                 // A cancelled or skipped publish says nothing about the cache
-                bad: ['failure'],
+                bad: (result) => result === 'failure',
                 counts: ['success', 'failure'].includes(needs['engine-cache'].result),
                 // The job is green too when no platform passed its engine tests and
                 // nothing was uploaded. Only an upload says the cache works again.
@@ -400,7 +403,7 @@ jobs:
             for (const track of tracks) {
               if (!track.counts) continue;
               const failed = track.jobs
-                .filter((name) => track.bad.includes(needs[name].result))
+                .filter((name) => track.bad(needs[name].result))
                 .map((name) => `${name} (${needs[name].result})`);
               const issue = open.find(i => (i.body || '').includes(track.marker));
 
