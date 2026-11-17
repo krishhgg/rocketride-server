@@ -131,7 +131,7 @@ jobs:
       nodownload: true
       package: true
       # retention_days inherits _build.yaml's default (1 day) — see comment there.
-    secrets: inherit
+    # No `secrets: inherit` in the fork: _build.yaml reads only the job token. # HILLCLIMB-HARNESS
 
   cleanup-prereleases:
     name: Clean up prereleases
