@@ -135,6 +135,8 @@ The cache archive is not the release archive (`scripts/release/engine-cache-pack
 
 A run for a push whose CI failed joins the concurrency group `prerelease-cache-<branch>`, so it never cancels a run that is publishing a prerelease. The `alert` job keeps two tracking issues per branch, both labelled `prerelease-failing`: one for the prerelease jobs, which only a green CI run or a manual dispatch opens or closes, and one for the `engine-cache` job, which every run can open. It closes only after a run that uploaded an engine, not after a green run that had nothing to publish.
 
+A run that only feeds the engine cache first asks whether the cache has that commit's engine already (`engine_cache_check` in `_init.yaml`, `scripts/release/engine-cache-check.mjs`). It hashes `packages/server` as the builder does and looks in the release for the archive and a matching manifest (the full hash, the vcpkg version and the packer's archive format) for Linux, Windows and macOS. When all three are there, the build and the `engine-cache` job are skipped: most pushes leave `packages/server` alone. When the check cannot tell, the engine is built. A green CI run and a manual dispatch always build.
+
 ## Stable Releases
 
 **Workflow:** `.github/workflows/release.yaml`

@@ -327,7 +327,7 @@ async function ensureRelease(gh, repo, { dryRun, log }) {
 }
 
 /** Every asset of the release, all pages. */
-async function listAssets(gh, repo) {
+export async function listAssets(gh, repo) {
 	const id = (await gh(['api', `repos/${repo}/releases/tags/${ENGINE_CACHE_TAG}`, '--jq', '.id'])).trim();
 	const out = await gh([
 		'api',

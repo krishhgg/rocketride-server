@@ -135,9 +135,19 @@ jobs:
       # this nightly job acquires a runner. For workflow_dispatch we use
       # the ref the user picked when dispatching.
       ref: ${{ github.event.workflow_run.head_sha || github.ref }}
+      # A run that only feeds the engine cache asks first whether the cache has
+      # this engine already (see `build`)
+      engine_cache_check: ${{ github.event.workflow_run.conclusion == 'failure' }}
   build:
     name: Build
     needs: init
+    # A run for a push whose CI failed only feeds the engine cache. When the
+    # cache already has the engine of that commit for every platform, there is
+    # nothing to build: most pushes leave packages/server alone, and their
+    # engine was published by an earlier one. `engine-cache` is skipped with
+    # this job. A green CI run or a manual dispatch always builds: the
+    # prerelease needs it.
+    if: ${{ !(github.event.workflow_run.conclusion == 'failure' && needs.init.outputs.engine_cached == 'true') }}
     uses: ./.github/workflows/_build.yaml
     permissions:
       contents: read
@@ -213,8 +223,9 @@ jobs:
     name: Engine cache
     needs: [init, build]
     # Without a condition a failed build skips this job. Not when the run was
-    # cancelled, and not when `init` turned the run away.
-    if: ${{ !cancelled() && needs.init.result == 'success' }}
+    # cancelled, not when `init` turned the run away, and not when the build
+    # was skipped because the cache has this engine already.
+    if: ${{ !cancelled() && needs.init.result == 'success' && needs.build.result != 'skipped' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # Writes go through the release-bot App token below, not GITHUB_TOKEN

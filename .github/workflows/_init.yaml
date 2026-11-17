@@ -19,6 +19,14 @@ on:
         required: false
         type: boolean
         default: false
+      engine_cache_check:
+        description: >-
+          Ask whether the engine-cache release already holds the engine of this
+          checkout for every platform (outputs server_hash and engine_cached).
+          prerelease.yaml sets it for a run that only feeds the engine cache
+        required: false
+        type: boolean
+        default: false
     outputs:
       server_version:
         value: ${{ jobs.init.outputs.server_version }}
@@ -38,6 +46,14 @@ on:
         value: ${{ jobs.init.outputs.build_stamp }}
       server_tag_exists:
         value: ${{ jobs.init.outputs.server_tag_exists }}
+      server_hash:
+        description: The server source hash of the checkout. Empty unless engine_cache_check is set
+        value: ${{ jobs.init.outputs.server_hash }}
+      engine_cached:
+        description: >-
+          'true' when the engine cache has this checkout's engine for every
+          platform CI builds. 'false', or empty without engine_cache_check
+        value: ${{ jobs.init.outputs.engine_cached }}
 
 jobs:
   init:
@@ -56,6 +72,8 @@ jobs:
       build_hash: ${{ steps.vars.outputs.build_hash }}
       build_stamp: ${{ steps.vars.outputs.build_stamp }}
       server_tag_exists: ${{ steps.server_tag_check.outputs.exists }}
+      server_hash: ${{ steps.engine_cache.outputs.server_hash }}
+      engine_cached: ${{ steps.engine_cache.outputs.engine_cached }}
     steps:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -86,3 +104,29 @@ jobs:
           else
             echo "exists=false" >> $GITHUB_OUTPUT
           fi
+
+      # The check at the revision of the calling workflow, not the commit to
+      # build: stage may not have it yet. Only `scripts/release`, beside the
+      # checkout it reads.
+      - name: Check out the engine cache check
+        if: inputs.engine_cache_check
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          sparse-checkout: scripts/release
+          path: .engine-cache-tools
+
+      # Hashes packages/server as the builder does and asks the engine-cache
+      # release for that hash (engine-cache-check.mjs). Reads only. It answers
+      # 'false' whenever it cannot tell, and a failure of the step itself
+      # leaves the output empty, which the caller reads as 'false' too: this
+      # may cost a build, it never stops one.
+      - name: Ask the engine cache for this engine
+        id: engine_cache
+        if: inputs.engine_cache_check
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: node .engine-cache-tools/scripts/release/engine-cache-check.mjs
