@@ -10,6 +10,7 @@ const path = require('path');
 const fs = require('fs');
 const { logOutput } = require('./log');
 const { taskDebug } = require('./debug');
+const { withTestReport } = require('./hillclimb-reports'); // HILLCLIMB-HARNESS
 
 /** Windows: extension order and how to run. Used for resolution and execution. */
 const WIN_EXTENSIONS = [
@@ -144,6 +145,7 @@ async function execCommand(command, args, options = {}) {
 		silent = false,
 	} = options;
 	command = resolveCommandOnEnvPath(command, env);
+	args = withTestReport(command, args, task); // HILLCLIMB-HARNESS
 	const inherit = stdio === 'inherit';
 	const ignoreStdio = stdio === 'ignore';
 

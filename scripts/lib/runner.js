@@ -118,6 +118,7 @@ class TaskRunner {
 				title: actionObj.description || actionName,
 				task: async (ctx, task) => {
 					task._logModule = actionName;
+					task._hillclimbSuite = actionName; // HILLCLIMB-HARNESS
 					return await actionObj.run(ctx, task, { logModule: actionName });
 				},
 				exitOnError: true,

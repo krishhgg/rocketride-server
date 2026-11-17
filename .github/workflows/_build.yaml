@@ -343,6 +343,7 @@ jobs:
           # test time. On Windows a hardlink over an already-loaded native .pyd
           # (e.g. cryptography's _rust.pyd) fails with a file lock; copy is atomic.
           UV_LINK_MODE: copy
+          HILLCLIMB_REPORT_DIR: ${{ runner.temp }}/hillclimb-reports # HILLCLIMB-HARNESS
         run: ${{ matrix.builder_cmd }} ${{ inputs.test_targets }} --verbose ${{ vars.CI_TEST_SEQUENTIAL == 'true' && '--sequential' || '' }} --autoinstall ${{ matrix.platform == 'ubuntu' && '--system-compiler' || '' }}
 
       # rocketride_graph applies different Cypher rules on AGE 1.5.0 and 1.6.0,
@@ -351,7 +352,18 @@ jobs:
       # It runs only when test_targets includes the node suites.
       - name: Test rocketride_graph on AGE 1.6.0 / Linux
         if: matrix.platform == 'ubuntu' && inputs.codeql == false && inputs.test && (inputs.test_targets == 'test' || contains(inputs.test_targets, 'nodes:test'))
-        run: RR_TEST_AGE_DSN="$RR_TEST_AGE_1_6_DSN" ./dist/server/engine -m pytest nodes/test/test_rocketride_graph_live.py -v
+        run: RR_TEST_AGE_DSN="$RR_TEST_AGE_1_6_DSN" ./dist/server/engine -m pytest nodes/test/test_rocketride_graph_live.py -v --junitxml="$RUNNER_TEMP/hillclimb-reports/nodes-graph-age-1-6.pytest.xml" -o junit_family=xunit1 # HILLCLIMB-HARNESS
+
+      # One structured report per test suite (scripts/lib/hillclimb-reports.js). # HILLCLIMB-HARNESS
+      - name: Upload test reports # HILLCLIMB-HARNESS
+        if: ${{ !cancelled() && inputs.codeql == false && inputs.test }} # HILLCLIMB-HARNESS
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with: # HILLCLIMB-HARNESS
+          name: test-reports-${{ matrix.platform }} # HILLCLIMB-HARNESS
+          path: ${{ runner.temp }}/hillclimb-reports/ # HILLCLIMB-HARNESS
+          retention-days: 14 # HILLCLIMB-HARNESS
+          if-no-files-found: warn # HILLCLIMB-HARNESS
+          overwrite: true # HILLCLIMB-HARNESS
 
       # The test servers' side of a failure. Printed rather than uploaded:
       # storage-cleanup.yml deletes artifacts after 3 days, the job log stays.

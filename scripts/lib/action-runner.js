@@ -142,6 +142,7 @@ function buildLeafTask(name, actionObj, logModule) {
 
 			// Store logModule on task for execCommand to find automatically
 			task._logModule = logModule;
+			task._hillclimbSuite = name; // HILLCLIMB-HARNESS
 
 			// Acquire additional manual locks if needed
 			if (actionObj.locks?.length) {
