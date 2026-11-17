@@ -148,7 +148,11 @@ jobs:
       build_hash: ${{ needs.init.outputs.build_hash }}
       build_stamp: ${{ needs.init.outputs.build_stamp }}
       nodownload: true
-      package: true
+      # After a failed CI run only the engine cache is fed, which needs the
+      # build, the engine tests and the cache archive (`engine_cache`). The
+      # other suites already failed in CI, and nothing reads a release archive.
+      test: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+      package: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
       # Each platform's engine goes to the cache once its engine tests pass
       engine_cache: true
       # retention_days inherits _build.yaml's default (1 day) — see comment there.
