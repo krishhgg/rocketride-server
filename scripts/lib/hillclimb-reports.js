@@ -6,7 +6,8 @@
 // When HILLCLIMB_REPORT_DIR is set, execCommand passes every command through
 // withTestReport(). A command that runs a test suite gets one more flag, so
 // the suite also writes a structured report named after the builder task that
-// ran it:
+// ran it, with `__` for the task name's colon (ai:run-pytest gives
+// ai__run-pytest.pytest.xml):
 //   pytest     <dir>/<task>.pytest.xml    JUnit XML (--junitxml)
 //   jest       <dir>/<task>.jest.json     jest's JSON results (--json --outputFile)
 //   node:test  <dir>/<task>.nodetest.xml  JUnit XML from node's file reporter
@@ -32,7 +33,10 @@ const written = new Map();
 
 /** File path for one suite's report. A task that runs twice gets `.2`, `.3`. */
 function reportPath(dir, suite, suffix) {
-	const base = String(suite).replace(/[^A-Za-z0-9._-]+/g, '-');
+	// The reader cuts the name at the first dot and turns `__` back into a colon.
+	const base = String(suite)
+		.replace(/:/g, '__')
+		.replace(/[^A-Za-z0-9_-]+/g, '-');
 	const count = (written.get(base) || 0) + 1;
 	written.set(base, count);
 	return path.join(dir, count === 1 ? `${base}.${suffix}` : `${base}.${count}.${suffix}`);
