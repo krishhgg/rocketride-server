@@ -14,7 +14,7 @@
 	"author": "rocketride.org",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/rocketride-org/rocketride-server.git"
+		"url": "git+https://github.com/krishhgg/rocketride-server.git"
 	},
 	"bugs": {
 		"url": "https://github.com/rocketride-org/rocketride-server/issues"
