@@ -10,7 +10,7 @@
 //   pytest     <dir>/<task>.pytest.xml    JUnit XML (--junitxml)
 //   jest       <dir>/<task>.jest.json     jest's JSON results (--json --outputFile)
 //   node:test  <dir>/<task>.nodetest.xml  JUnit XML from node's file reporter
-//   Catch2     <dir>/<task>.catch2.xml    Catch2's JUnit reporter
+//   Catch2     <dir>/<task>.catch2.xml    Catch2's XML reporter (results per test case)
 //   vitest     <dir>/<task>.vitest.xml    JUnit XML from vitest's junit reporter
 // engtest takes Catch2 flags only as the words of its --testArgs option, so
 // its reporter flags go inside that one argument.
@@ -111,7 +111,9 @@ function withTestReport(command, args, task, cwd) {
 	}
 	if (kind === 'catch2') {
 		const file = reportPath(dir, suite, 'catch2.xml');
-		const flags = ['--reporter', 'console', '--reporter', `junit::out=${file}`];
+		// Catch2 3 takes several reporters: console keeps the log as it was, and
+		// the XML reporter writes a result for every test case and section.
+		const flags = ['--reporter', 'console', '--reporter', `xml::out=${file}`];
 		if (exeName(command) !== 'engtest') return [...list, ...flags];
 		// engtest splits --testArgs on whitespace, so a path with a space cannot be passed.
 		if (/\s/.test(file)) return args;
