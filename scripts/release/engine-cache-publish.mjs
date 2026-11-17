@@ -15,7 +15,8 @@
  * latest build, so a pull request whose packages/server matched an older
  * develop commit, or stage, compiled the engine (a ~54 min build, not ~31).
  *
- * Input is the directory the build's `server-artifacts-*` were downloaded to:
+ * Input is the directory the build's `engine-cache-*` artifacts were
+ * downloaded to (engine-cache-package.mjs writes them):
  * `rocketride-server-v<version>-<platform>.manifest.json` beside its
  * `.tar.gz` / `.zip`. Each pair is uploaded as
  * `rocketride-engine-<first 16 hex of server.buildHash>-<platform>.*`, archive
@@ -23,8 +24,16 @@
  * for the same hash replaces the assets (--clobber); a race between two runs
  * is retried, and an asset another run already pruned is not an error.
  *
+ * A platform uploads its engine only once its engine tests passed, and says
+ * so in `engine-tested-<platform>.json`. A platform with that file and no
+ * archive pair, or a pair built from another hash, fails the run after the
+ * other platforms were published. A directory with neither is an error too,
+ * unless --allow-empty says the build failed, when it can mean that no
+ * platform passed its engine tests: then there is nothing to publish and the
+ * release is left as it is.
+ *
  * Usage:
- *   node scripts/release/engine-cache-publish.mjs <artifacts-dir> [--keep=16] [--dry-run]
+ *   node scripts/release/engine-cache-publish.mjs <artifacts-dir> [--keep=16] [--allow-empty] [--dry-run]
  *
  * Needs `gh`, GH_TOKEN with contents: write, and GH_REPO (owner/name).
  * --dry-run prints the uploads and deletions without making them.
@@ -52,6 +61,7 @@ const NOTES = [
 
 const PLATFORMS = ['linux-x64', 'win64', 'darwin-arm64', 'darwin-x64'];
 const MANIFEST_RE = new RegExp(`^rocketride-server-v.+-(${PLATFORMS.join('|')})\\.manifest\\.json$`);
+const TESTED_RE = new RegExp(`^engine-tested-(${PLATFORMS.join('|')})\\.json$`);
 const ASSET_RE = /^rocketride-engine-([0-9a-f]{16})-(.+?)\.(manifest\.json|tar\.gz|zip)$/;
 const HASH_RE = /^[0-9a-f]{64}$/;
 
@@ -67,12 +77,35 @@ export function parseEngineAssetName(name) {
 }
 
 /**
+ * The platforms whose engine tests passed, from the markers the packer writes
+ * before it makes the archive.
+ *
+ * @returns {Promise<Array<{platform: string, hash: string}>>}
+ */
+export async function collectTested(dir) {
+	const tested = [];
+	for (const name of (await fs.readdir(dir)).sort()) {
+		const match = name.match(TESTED_RE);
+		if (!match) continue;
+		const marker = JSON.parse(await fs.readFile(path.join(dir, name), 'utf8'));
+		if (typeof marker?.buildHash !== 'string' || !HASH_RE.test(marker.buildHash)) {
+			throw new Error(`${name}: buildHash is not a SHA-256 hex digest (${JSON.stringify(marker?.buildHash)})`);
+		}
+		tested.push({ platform: match[1], hash: marker.buildHash });
+	}
+	return tested;
+}
+
+/**
  * The packaged engines in a directory, one per platform manifest.
  *
+ * @param {string} dir
+ * @param {Object} [opts]
+ * @param {boolean} [opts.allowEmpty] - Return [] for a directory without one
  * @returns {Promise<Array<Object>>} Each {platform, hash, vcpkg, manifest,
  *   archive, ext}: the two paths, and the archive's extension
  */
-export async function collectArtifacts(dir) {
+export async function collectArtifacts(dir, { allowEmpty = false } = {}) {
 	const names = await fs.readdir(dir);
 	const artifacts = [];
 
@@ -96,7 +129,9 @@ export async function collectArtifacts(dir) {
 		artifacts.push({ platform, hash, vcpkg, manifest, archive: path.join(dir, `${base}.${ext}`), ext });
 	}
 
-	if (!artifacts.length) throw new Error(`No rocketride-server-v*-<platform>.manifest.json in ${dir}`);
+	if (!artifacts.length && !allowEmpty) {
+		throw new Error(`No rocketride-server-v*-<platform>.manifest.json in ${dir}`);
+	}
 	return artifacts;
 }
 
@@ -261,6 +296,7 @@ async function listAssets(gh, repo) {
  * @param {string} opts.repo - owner/name
  * @param {number} [opts.keep] - Hashes to keep after pruning
  * @param {boolean} [opts.dryRun] - Print the writes instead of making them
+ * @param {boolean} [opts.allowEmpty] - The build failed, so no engine at all is not an error
  * @param {Function} [opts.gh] - Runs gh with an argument list, resolves with stdout
  * @param {Function} [opts.log]
  * @param {Function} [opts.wait] - Sleep between retries
@@ -272,13 +308,36 @@ export async function publish({
 	repo,
 	keep = DEFAULT_KEEP,
 	dryRun = false,
+	allowEmpty = false,
 	gh = runGh,
 	log = console.log,
 	wait = sleep,
 	now = () => new Date().toISOString(),
 }) {
-	const artifacts = await collectArtifacts(dir);
-	for (const a of artifacts) log(`${a.platform}: buildHash ${a.hash}, vcpkg ${a.vcpkg}`);
+	const tested = await collectTested(dir);
+	// With a marker to answer for, a missing engine is reported per platform below
+	const found = await collectArtifacts(dir, { allowEmpty: allowEmpty || tested.length > 0 });
+	for (const a of found) log(`${a.platform}: buildHash ${a.hash}, vcpkg ${a.vcpkg}`);
+
+	// An engine that passed its tests and is not here, or is not the one tested
+	const failed = [];
+	const artifacts = found.filter((a) => {
+		const marker = tested.find((t) => t.platform === a.platform);
+		if (!marker || marker.hash === a.hash) return true;
+		log(`::error::${a.platform}: the archive is built from ${a.hash}, the engine tests ran on ${marker.hash}`);
+		failed.push(a.platform);
+		return false;
+	});
+	for (const { platform } of tested) {
+		if (found.some((a) => a.platform === platform)) continue;
+		log(`::error::${platform}: its engine tests passed, but its archive and manifest are not in ${dir}`);
+		failed.push(platform);
+	}
+
+	if (!artifacts.length && !failed.length) {
+		log('No platform passed its engine tests, so there is nothing to publish.');
+		return { published: [], removed: [], failed };
+	}
 
 	try {
 		await ensureRelease(gh, repo, { dryRun, log });
@@ -292,7 +351,6 @@ export async function publish({
 	// directory beside the artifacts (same filesystem, no 1 GB copy)
 	const staging = await fs.mkdtemp(path.join(dir, '.engine-cache-'));
 	const published = [];
-	const failed = [];
 	try {
 		await Promise.all(
 			artifacts.map(async (a) => {
@@ -393,17 +451,20 @@ async function main() {
 	const args = process.argv.slice(2);
 	const dir = args.find((a) => !a.startsWith('--'));
 	const dryRun = args.includes('--dry-run');
+	const allowEmpty = args.includes('--allow-empty');
 	const keepArg = args.find((a) => a.startsWith('--keep='));
 	const keep = keepArg ? Number(keepArg.slice('--keep='.length)) : DEFAULT_KEEP;
 	const repo = process.env.GH_REPO || process.env.GITHUB_REPOSITORY;
 
 	if (!dir || !repo || !Number.isInteger(keep) || keep < 1) {
-		console.error('Usage: GH_REPO=owner/name engine-cache-publish.mjs <artifacts-dir> [--keep=N] [--dry-run]');
+		console.error(
+			'Usage: GH_REPO=owner/name engine-cache-publish.mjs <artifacts-dir> [--keep=N] [--allow-empty] [--dry-run]'
+		);
 		process.exitCode = 2;
 		return;
 	}
 
-	const { published, removed, failed } = await publish({ dir, repo, keep, dryRun });
+	const { published, removed, failed } = await publish({ dir, repo, keep, dryRun, allowEmpty });
 	console.log(
 		`Published ${published.length} hash(es), removed ${removed.length} asset(s)${dryRun ? ' (dry run)' : ''}.`
 	);

@@ -18,6 +18,7 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 import {
 	collectArtifacts,
+	collectTested,
 	engineAssetName,
 	parseEngineAssetName,
 	planPrune,
@@ -28,9 +29,24 @@ import {
 const HASH = 'a'.repeat(16) + 'b'.repeat(48);
 const REPO = 'owner/repo';
 
-/** A directory laid out like the downloaded server-artifacts-* of one build. */
-async function artifactsDir({ hash = HASH, platforms = ['linux-x64', 'win64', 'darwin-arm64'] } = {}) {
+/**
+ * A directory laid out like the downloaded engine-cache-* artifacts of one
+ * build. `tested` are the platforms that left a marker: by default none, as
+ * for artifacts made before the markers existed.
+ */
+async function artifactsDir({
+	hash = HASH,
+	platforms = ['linux-x64', 'win64', 'darwin-arm64'],
+	tested = [],
+	testedHash = hash,
+} = {}) {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'rr-engine-cache-'));
+	for (const platform of tested) {
+		await fs.writeFile(
+			path.join(dir, `engine-tested-${platform}.json`),
+			JSON.stringify({ platform, buildHash: testedHash })
+		);
+	}
 	for (const platform of platforms) {
 		const base = path.join(dir, `rocketride-server-v3.6.0-${platform}`);
 		await fs.writeFile(
@@ -157,6 +173,22 @@ describe('collectArtifacts', () => {
 	it('refuses a directory with no engines', async () => {
 		const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'rr-engine-cache-'));
 		await assert.rejects(collectArtifacts(dir), /No rocketride-server-v\*/);
+	});
+});
+
+describe('collectTested', () => {
+	it('reads the platforms whose engine tests passed, and their hash', async () => {
+		const dir = await artifactsDir({ tested: ['win64', 'linux-x64'] });
+		assert.deepEqual(await collectTested(dir), [
+			{ platform: 'linux-x64', hash: HASH },
+			{ platform: 'win64', hash: HASH },
+		]);
+		assert.deepEqual(await collectTested(await artifactsDir()), []);
+	});
+
+	it('refuses a marker without a full hash', async () => {
+		const dir = await artifactsDir({ tested: ['linux-x64'], testedHash: 'abc123' });
+		await assert.rejects(collectTested(dir), /engine-tested-linux-x64\.json: buildHash is not a SHA-256/);
 	});
 });
 
@@ -309,6 +341,95 @@ describe('publish', () => {
 		assert.deepEqual(
 			deletes.sort(),
 			[1, 2, 99].map((id) => `repos/${REPO}/releases/assets/${id}`)
+		);
+	});
+
+	it('publishes the platforms that passed their engine tests when another did not', async () => {
+		// Windows failed its engine tests: no marker and no archive from it
+		const platforms = ['linux-x64', 'darwin-arm64'];
+		const dir = await artifactsDir({ platforms, tested: platforms });
+		const { gh, uploaded } = fakeGh();
+
+		const result = await publish({ dir, repo: REPO, gh, log: quiet, wait: noWait, allowEmpty: true });
+
+		assert.deepEqual(result.failed, []);
+		assert.deepEqual(result.published, [HASH.slice(0, 16)]);
+		assert.deepEqual(uploaded.sort(), [
+			`rocketride-engine-${HASH.slice(0, 16)}-darwin-arm64.manifest.json`,
+			`rocketride-engine-${HASH.slice(0, 16)}-darwin-arm64.tar.gz`,
+			`rocketride-engine-${HASH.slice(0, 16)}-linux-x64.manifest.json`,
+			`rocketride-engine-${HASH.slice(0, 16)}-linux-x64.tar.gz`,
+		]);
+	});
+
+	it('leaves the release alone when no platform passed its engine tests', async () => {
+		const dir = await artifactsDir({ platforms: [] });
+		const { gh, calls } = fakeGh();
+		const lines = [];
+
+		const result = await publish({ dir, repo: REPO, gh, log: (line) => lines.push(line), allowEmpty: true });
+
+		assert.deepEqual(result, { published: [], removed: [], failed: [] });
+		assert.deepEqual(calls, []);
+		assert.match(lines.join('\n'), /No platform passed its engine tests/);
+	});
+
+	it('refuses an empty directory after a green build', async () => {
+		const dir = await artifactsDir({ platforms: [] });
+		const { gh, calls } = fakeGh();
+
+		await assert.rejects(publish({ dir, repo: REPO, gh, log: quiet }), /No rocketride-server-v\*/);
+		assert.deepEqual(calls, []);
+	});
+
+	it('fails for a platform that passed its engine tests and sent no archive, after publishing the rest', async () => {
+		const dir = await artifactsDir({
+			platforms: ['linux-x64', 'darwin-arm64'],
+			tested: ['linux-x64', 'darwin-arm64', 'win64'],
+		});
+		const { gh, uploaded } = fakeGh();
+		const lines = [];
+
+		const result = await publish({
+			dir,
+			repo: REPO,
+			gh,
+			log: (line) => lines.push(line),
+			wait: noWait,
+			allowEmpty: true,
+		});
+
+		assert.deepEqual(result.failed, ['win64']);
+		assert.equal(uploaded.length, 4);
+		assert.match(
+			lines.join('\n'),
+			/::error::win64: its engine tests passed, but its archive and manifest are not in/
+		);
+	});
+
+	it('fails when the only platform that passed its engine tests sent no archive', async () => {
+		const dir = await artifactsDir({ platforms: [], tested: ['linux-x64'] });
+		const { gh, uploaded } = fakeGh();
+
+		const result = await publish({ dir, repo: REPO, gh, log: quiet, wait: noWait, allowEmpty: true });
+
+		assert.deepEqual(result.failed, ['linux-x64']);
+		assert.deepEqual(uploaded, []);
+	});
+
+	it('does not publish an archive built from another hash than the one tested', async () => {
+		const dir = await artifactsDir({ platforms: ['linux-x64'], tested: ['linux-x64'], testedHash: 'c'.repeat(64) });
+		const { gh, uploaded } = fakeGh();
+		const lines = [];
+
+		const result = await publish({ dir, repo: REPO, gh, log: (line) => lines.push(line), wait: noWait });
+
+		assert.deepEqual(result.failed, ['linux-x64']);
+		assert.deepEqual(result.published, []);
+		assert.deepEqual(uploaded, []);
+		assert.match(
+			lines.join('\n'),
+			/::error::linux-x64: the archive is built from a+b+, the engine tests ran on c+/
 		);
 	});
 

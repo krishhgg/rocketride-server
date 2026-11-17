@@ -130,6 +130,8 @@ jobs:
       build_stamp: ${{ needs.init.outputs.build_stamp }}
       nodownload: true
       package: true
+      # Each platform's engine goes to the cache once its engine tests pass
+      engine_cache: true
       # retention_days inherits _build.yaml's default (1 day) — see comment there.
     # No `secrets: inherit` in the fork: _build.yaml reads only the job token. # HILLCLIMB-HARNESS
 
@@ -174,10 +176,20 @@ jobs:
   #
   # Pull request code cannot reach this job: `init` admits only pushes to
   # this repository's develop and stage, and dispatches.
+  #
+  # What is published is not the release archive. Each platform uploads an
+  # `engine-cache-<platform>` artifact as soon as its engine tests pass
+  # (`engine_cache` in _build.yaml), so this job also runs when the build
+  # matrix failed: a platform whose engine tests passed still feeds the cache
+  # when a later suite, or another platform, went red. The prerelease, its
+  # cleanup and the Docker image still need the whole build green.
   # ---------------------------------------------------------------------------
   engine-cache:
     name: Engine cache
-    needs: build
+    needs: [init, build]
+    # Without a condition a failed build skips this job. Not when the run was
+    # cancelled, and not when `init` turned the run away.
+    if: ${{ !cancelled() && needs.init.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # Writes go through the release-bot App token below, not GITHUB_TOKEN
@@ -195,16 +207,18 @@ jobs:
           persist-credentials: false
           sparse-checkout: scripts/release
 
-      # As _release.yaml's server release downloads them
+      # One artifact per platform whose engine tests passed, none when none did
       - name: Download artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          pattern: server-artifacts-*
+          pattern: engine-cache-*
           merge-multiple: true
           path: engine-assets
 
       - name: List artifacts
-        run: find engine-assets -type f | sort
+        run: |
+          mkdir -p engine-assets
+          find engine-assets -type f | sort
 
       # The first publish creates the `engine-cache` tag on a commit whose
       # tree contains workflow files, which needs Workflows:write. GITHUB_TOKEN
@@ -225,7 +239,11 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.bot_token.outputs.token || github.token }} # HILLCLIMB-HARNESS
           GH_REPO: ${{ github.repository }}
-        run: node scripts/release/engine-cache-publish.mjs engine-assets
+          # A green build means every platform passed its engine tests, so an
+          # empty directory is then an error. After a failed build it can mean
+          # that no platform did, which is nothing to publish.
+          ALLOW_EMPTY: ${{ needs.build.result != 'success' && '--allow-empty' || '' }}
+        run: node scripts/release/engine-cache-publish.mjs engine-assets ${ALLOW_EMPTY:+"$ALLOW_EMPTY"}
 
   # ---------------------------------------------------------------------------
   # Make a failed prerelease loud.

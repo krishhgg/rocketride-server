@@ -59,6 +59,16 @@ on:
         required: false
         type: string
         default: test
+      engine_cache:
+        # Not `package`: experimental-release.yaml packages with the tests off,
+        # and an engine that never ran its tests must not reach the cache.
+        description: >-
+          Run the engine tests on their own after the build and upload this
+          platform's engine for the engine cache once they pass, whatever a
+          later suite does. Only prerelease.yaml sets it
+        required: false
+        type: boolean
+        default: false
       retention_days:
         # 1 day is enough to chain build → release → docker within the same
         # workflow run; downloads inside a run work even after "expiry".
@@ -181,6 +191,55 @@ jobs:
           # cloud target is the rocketride.*.cloudUrl setting. (The Stripe
           # publishable key arrives from the server probe at runtime.)
         run: ${{ matrix.builder_cmd }} build --verbose --autoinstall ${{ matrix.platform == 'ubuntu' && '--system-compiler' || '' }} --version="$FULL_VERSION" --hash="$BUILD_HASH" --stamp="$BUILD_STAMP" ${{ inputs.nodownload && '--nodownload' || '' }}
+
+      # For the engine cache (`engine_cache`, prerelease.yaml only). A cached
+      # engine is keyed by the server source alone, so the tests that decide
+      # whether it may be cached are the engine's: `server:test` is the block a
+      # build that downloads its engine skips. They run here on their own, and
+      # this platform's engine is uploaded as soon as they pass. A suite that
+      # fails later in the Test step fails the job and holds back the
+      # prerelease, not the engine.
+      #
+      # The Test step runs `server:test` again: the builder skips a task only
+      # when it already ran in the same process.
+      - name: Test the engine
+        id: engine_tests
+        if: inputs.engine_cache
+        env:
+          ROCKETRIDE_APIKEY: MYAPIKEY
+          UV_LINK_MODE: copy
+        run: ${{ matrix.builder_cmd }} server:test --verbose --autoinstall ${{ matrix.platform == 'ubuntu' && '--system-compiler' || '' }}
+
+      # The packer at the revision of this workflow file, not the built commit:
+      # stage may not have it yet
+      - name: Check out the engine cache packer
+        if: inputs.engine_cache
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          sparse-checkout: scripts/release
+          path: .engine-cache-tools
+
+      # Not `builder package`: the cache archive leaves out what a downloading
+      # build stages from its own checkout (see engine-cache-package.mjs)
+      - name: Package the engine for the cache
+        if: inputs.engine_cache
+        shell: bash
+        run: |
+          trap 'rm -rf .engine-cache-tools' EXIT
+          node .engine-cache-tools/scripts/release/engine-cache-package.mjs --out=dist/engine-cache
+
+      # Also when packaging failed: the marker it wrote first tells the
+      # publisher that an engine which passed its tests did not arrive
+      - name: Upload the engine for the cache
+        if: ${{ !cancelled() && inputs.engine_cache && steps.engine_tests.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: engine-cache-${{ matrix.platform }}
+          retention-days: ${{ inputs.retention_days }}
+          path: ${{ github.workspace }}/dist/engine-cache/
+          if-no-files-found: error
 
       # The node image, built from the dist/server just built and checked as a
       # run gets it. Before the tests, which install into dist/server (the image
