@@ -51,6 +51,9 @@
  *
  * Needs `gh`, GH_TOKEN with contents: write, and GH_REPO (owner/name).
  * --dry-run prints the uploads and deletions without making them.
+ *
+ * In a workflow step it sets the output `published` to `true` when at least
+ * one platform's engine was uploaded, and to `false` otherwise.
  */
 
 import { execFile } from 'node:child_process';
@@ -530,6 +533,24 @@ async function linkOrCopy(from, to) {
 	}
 }
 
+/**
+ * Tell the workflow whether this run put an engine into the cache, as the
+ * step output `published`. A run that had nothing to publish is green too,
+ * and must not be read as a publish that worked (prerelease.yaml closes the
+ * engine cache issue on this output, not on the job's result).
+ *
+ * @param {string[]} published - The hashes publish() uploaded
+ * @param {Object} [opts]
+ * @param {boolean} [opts.dryRun] - Nothing was uploaded
+ * @param {string} [opts.file] - The step's output file, GITHUB_OUTPUT by default
+ * @returns {Promise<boolean>}
+ */
+export async function reportPublished(published, { dryRun = false, file = process.env.GITHUB_OUTPUT } = {}) {
+	const value = published.length > 0 && !dryRun;
+	if (file) await fs.appendFile(file, `published=${value}\n`);
+	return value;
+}
+
 /** Parse argv, publish, and set the exit code. */
 async function main() {
 	const args = process.argv.slice(2);
@@ -550,6 +571,7 @@ async function main() {
 
 	const jobs = jobsArg ? await readJobs(jobsArg.slice('--jobs='.length)) : undefined;
 	const { published, removed, failed } = await publish({ dir, repo, keep, dryRun, jobs });
+	await reportPublished(published, { dryRun });
 	console.log(
 		`Published ${published.length} hash(es), removed ${removed.length} asset(s)${dryRun ? ' (dry run)' : ''}.`
 	);

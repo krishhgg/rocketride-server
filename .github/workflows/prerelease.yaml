@@ -198,6 +198,10 @@ jobs:
     permissions:
       actions: read # the job list of this run, see "List the build jobs"
       contents: write # HILLCLIMB-HARNESS
+    outputs:
+      # `true` only when an engine was uploaded. The job is green as well when
+      # no platform passed its engine tests and nothing was published.
+      published: ${{ steps.publish.outputs.published }}
     steps:
       # The publisher at the revision of this workflow file, not the built
       # commit: stage may not have it yet
@@ -253,6 +257,7 @@ jobs:
           permission-workflows: write
 
       - name: Publish to the engine cache
+        id: publish
         env:
           GH_TOKEN: ${{ steps.bot_token.outputs.token || github.token }} # HILLCLIMB-HARNESS
           GH_REPO: ${{ github.repository }}

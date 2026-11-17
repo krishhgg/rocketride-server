@@ -24,6 +24,7 @@ import {
 	planPrune,
 	publish,
 	readJobs,
+	reportPublished,
 	stampUsage,
 	testedJobs,
 } from './engine-cache-publish.mjs';
@@ -619,5 +620,48 @@ describe('publish', () => {
 			lines.some((l) => l.startsWith('[dry-run] would upload rocketride-engine-aaaaaaaaaaaaaaaa-win64.zip'))
 		);
 		assert.deepEqual(removed, ['rocketride-engine-0000000000000000-linux-x64.tar.gz']);
+	});
+});
+
+describe('reportPublished', () => {
+	const outputFile = async () => path.join(await fs.mkdtemp(path.join(os.tmpdir(), 'rr-engine-output-')), 'out');
+
+	it('says true once an engine was uploaded, also when another platform failed', async () => {
+		const dir = await artifactsDir({ platforms: ['linux-x64', 'darwin-arm64'] });
+		const { gh } = fakeGh();
+		const { published, failed } = await publish({ dir, repo: REPO, gh, log: quiet, wait: noWait, jobs: runJobs() });
+		assert.deepEqual(failed, ['1 engine(s) that never arrived']);
+
+		const file = await outputFile();
+		assert.equal(await reportPublished(published, { file }), true);
+		assert.equal(await fs.readFile(file, 'utf8'), 'published=true\n');
+	});
+
+	it('says false for a green run that had nothing to publish', async () => {
+		// No platform passed its engine tests: the job is green, the cache got nothing
+		const dir = await artifactsDir({ platforms: [] });
+		const { gh } = fakeGh();
+		const { published, failed } = await publish({ dir, repo: REPO, gh, log: quiet, jobs: runJobs([]) });
+		assert.deepEqual(failed, []);
+
+		const file = await outputFile();
+		assert.equal(await reportPublished(published, { file }), false);
+		assert.equal(await fs.readFile(file, 'utf8'), 'published=false\n');
+	});
+
+	it('says false when every upload failed, and for a dry run', async () => {
+		const dir = await artifactsDir({ platforms: ['linux-x64'] });
+		const { gh } = fakeGh({ failures: { 'release upload': 9 } });
+		const { published } = await publish({ dir, repo: REPO, gh, log: quiet, wait: noWait });
+		const file = await outputFile();
+		assert.equal(await reportPublished(published, { file }), false);
+
+		const dry = await publish({ dir, repo: REPO, gh: fakeGh().gh, dryRun: true, log: quiet, wait: noWait });
+		assert.equal(await reportPublished(dry.published, { dryRun: true, file }), false);
+		assert.equal(await fs.readFile(file, 'utf8'), 'published=false\npublished=false\n');
+	});
+
+	it('writes nothing outside a workflow step', async () => {
+		assert.equal(await reportPublished(['a'.repeat(16)], { file: '' }), true);
 	});
 });
