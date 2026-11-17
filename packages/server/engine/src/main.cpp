@@ -25,6 +25,7 @@
 // The engine launcher - the engine itself lives in engine.dll behind engine_run()
 // -----------------------------------------------------------------------------
 // Fork only: this line changes the server source hash for the first engine-cache timing. HILLCLIMB-HARNESS
+// Fork only: this line changes it for the red push of the jest experiment. HILLCLIMB-HARNESS
 
 #include <engine.h>
 
