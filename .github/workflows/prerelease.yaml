@@ -138,75 +138,28 @@ jobs:
     needs: build
     # The prerelease slot is develop's; a stage push only feeds the engine cache
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.head_branch == 'develop'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
-          fetch-depth: 0
-
-      - name: Delete existing prerelease tags and releases
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          TAGS=$(git tag -l '*-prerelease')
-          if [ -z "$TAGS" ]; then
-            echo "No prerelease tags found"
-            exit 0
-          fi
-
-          for TAG in $TAGS; do
-            echo "Deleting release for ${TAG}..."
-            gh release delete "${TAG}" --yes 2>/dev/null || echo "  No release for ${TAG}"
-            echo "Deleting remote tag ${TAG}..."
-            git push origin --delete "${TAG}" 2>/dev/null || echo "  Remote tag ${TAG} not found"
-            echo "Deleting local tag ${TAG}..."
-            git tag -d "${TAG}" 2>/dev/null || echo "  Local tag ${TAG} not found"
-          done
-        env:
-          GH_TOKEN: ${{ github.token }}
+    runs-on: ubuntu-latest # HILLCLIMB-HARNESS
+    timeout-minutes: 5 # HILLCLIMB-HARNESS
+    steps: # HILLCLIMB-HARNESS stub: cleanup-prereleases
+      - run: echo "Stubbed in the fork. The real job deletes every *-prerelease tag and release." # HILLCLIMB-HARNESS
 
   prerelease:
     name: Prerelease
     needs: [init, build, cleanup-prereleases]
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.head_branch == 'develop'
-    uses: ./.github/workflows/_release.yaml
-    permissions:
-      contents: write
-      id-token: write
-    with:
-      ref: ${{ github.event.workflow_run.head_sha || github.ref }}
-      prerelease: true
-      server_version: ${{ needs.init.outputs.server_version }}
-      vscode_version: ${{ needs.init.outputs.vscode_version }}
-      client_mcp_version: ${{ needs.init.outputs.client_mcp_version }}
-      client_python_version: ${{ needs.init.outputs.client_python_version }}
-      client_typescript_version: ${{ needs.init.outputs.client_typescript_version }}
-    secrets: inherit
+    runs-on: ubuntu-latest # HILLCLIMB-HARNESS
+    timeout-minutes: 5 # HILLCLIMB-HARNESS
+    steps: # HILLCLIMB-HARNESS stub: prerelease
+      - run: echo "Stubbed in the fork. The real job publishes the prerelease through _release.yaml." # HILLCLIMB-HARNESS
 
   docker:
     name: Docker
     needs: [init, build]
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.head_branch == 'develop'
-    uses: ./.github/workflows/_docker.yaml
-    permissions:
-      contents: read
-      packages: write
-      # _docker.yaml's docker job declares id-token: write for cosign
-      # keyless Sigstore signing. GitHub validates at workflow-start that
-      # the caller covers every permission the reusable job declares;
-      # omitting id-token: write here is what produced the workflow-level
-      # `startup_failure` on every nightly run after PR #929 merged.
-      id-token: write
-    with:
-      ref: ${{ github.event.workflow_run.head_sha || github.ref }}
-      server_version: ${{ needs.init.outputs.server_version }}
-      prerelease: true
-    secrets: inherit
+    runs-on: ubuntu-latest # HILLCLIMB-HARNESS
+    timeout-minutes: 5 # HILLCLIMB-HARNESS
+    steps: # HILLCLIMB-HARNESS stub: docker
+      - run: echo "Stubbed in the fork. The real job builds and pushes the Docker image through _docker.yaml." # HILLCLIMB-HARNESS
 
   # ---------------------------------------------------------------------------
   # Publish the engines just built to the `engine-cache` release, named by
@@ -228,8 +181,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # Writes go through the release-bot App token below, not GITHUB_TOKEN
+    # In the fork they go through GITHUB_TOKEN: it has no release-bot secrets. # HILLCLIMB-HARNESS
+    # The `engine-cache` release and tag already exist there, so no tag is created. # HILLCLIMB-HARNESS
     permissions:
-      contents: read
+      contents: write # HILLCLIMB-HARNESS
     steps:
       # The publisher at the revision of this workflow file, not the built
       # commit: stage may not have it yet
@@ -255,6 +210,7 @@ jobs:
       # tree contains workflow files, which needs Workflows:write. GITHUB_TOKEN
       # can't have it, so use the release-bot App token, as _release.yaml does.
       - name: Generate release-bot token
+        if: github.repository == 'rocketride-org/rocketride-server' # HILLCLIMB-HARNESS
         id: bot_token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
@@ -267,7 +223,7 @@ jobs:
 
       - name: Publish to the engine cache
         env:
-          GH_TOKEN: ${{ steps.bot_token.outputs.token }}
+          GH_TOKEN: ${{ steps.bot_token.outputs.token || github.token }} # HILLCLIMB-HARNESS
           GH_REPO: ${{ github.repository }}
         run: node scripts/release/engine-cache-publish.mjs engine-assets
 
