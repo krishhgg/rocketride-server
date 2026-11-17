@@ -22,7 +22,8 @@
 // TEST-*.xml files written since that time into the task's one report.
 // A task that starts its runner twice (nodes:run-pytest, docs:validate) writes
 // a second file, <task>.2.<kind>.xml. `collect` joins the JUnit ones into the
-// task's first file, so every suite ends with exactly one report.
+// task's first file, so every suite ends with exactly one report. It also
+// sets the run name in each Catch2 file to the task's name.
 // Console output stays as it was. With the variable unset nothing changes.
 
 const fs = require('fs');
@@ -191,6 +192,29 @@ function surefireFiles(from, since) {
 		.filter((file) => fs.statSync(file).mtimeMs >= since);
 }
 
+/**
+ * Give each Catch2 XML report the task's name as its run name.
+ *
+ * Catch2 writes the executable name it was handed. engtest and nodetest hand it
+ * bytes from freed memory, and Catch2 lets some characters through that XML
+ * forbids, so the file does not always parse. The bytes are read as latin1 so
+ * nothing else in the file changes.
+ */
+function nameCatch2Runs(dir) {
+	for (const name of fs.readdirSync(dir).sort()) {
+		if (!name.endsWith('.catch2.xml')) continue;
+		try {
+			const file = path.join(dir, name);
+			const suite = name.split('.')[0].replace(/__/g, ':');
+			const text = fs.readFileSync(file, 'latin1');
+			const named = text.replace(/(<Catch2TestRun name=")[^"]*(")/, (_all, open, close) => open + suite + close);
+			if (named !== text) fs.writeFileSync(file, named, 'latin1');
+		} catch (err) {
+			console.log(`::warning::could not name the Catch2 run in ${name}: ${err.message}`);
+		}
+	}
+}
+
 /** Join <task>.2.<kind>.xml, .3 and so on into <task>.<kind>.xml, for the JUnit kinds a runner writes. */
 function joinNumbered(dir) {
 	const groups = new Map();
@@ -239,6 +263,7 @@ function collectReports(dir) {
 		}
 	}
 	fs.rmSync(pending, { recursive: true, force: true });
+	nameCatch2Runs(dir);
 	joinNumbered(dir);
 	for (const name of fs.readdirSync(dir).sort()) {
 		console.log(`${String(fs.statSync(path.join(dir, name)).size).padStart(10)}  ${name}`);
