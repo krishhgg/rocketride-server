@@ -345,6 +345,54 @@ function makeInstallTestDepsAction() {
 	};
 }
 
+// Requirement files the test suites would otherwise install while they run:
+// their own test requirements, then every node's. A node installs its
+// requirements when it is first imported or loaded, and each install holds the
+// engine-wide install lock, so during a test run every suite that imports a
+// node or starts a pipeline waits on whichever install is running. Installing
+// them all once before any suite starts leaves the suites only dry-runs.
+const SUITE_TEST_REQUIREMENTS = [
+	path.join(TEST_DIR, 'requirements.txt'),
+	path.join(PROJECT_ROOT, 'packages', 'ai', 'tests', 'requirements.txt'),
+	path.join(PROJECT_ROOT, 'packages', 'client-python', 'tests', 'requirements.txt'),
+];
+
+// Every requirement file under dist/server/nodes, the copies the engine loads,
+// matched as depends.py's own 'nodes/**/requirement*.txt' glob matches them.
+// The shared nodes/requirements.txt comes first, then the nodes by path.
+function findNodeRequirementFiles() {
+	const found = [];
+	const walk = (dir) => {
+		for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+			const full = path.join(dir, entry.name);
+			if (entry.isDirectory()) {
+				if (entry.name !== '__pycache__' && entry.name !== 'node_modules') walk(full);
+			} else if (/^requirement.*\.txt$/.test(entry.name)) {
+				found.push(full);
+			}
+		}
+	};
+	if (fs.existsSync(DIST_DIR)) walk(DIST_DIR);
+	const shared = path.join(DIST_DIR, 'requirements.txt');
+	return found.sort((a, b) => (a === shared ? -1 : b === shared ? 1 : a.localeCompare(b)));
+}
+
+// One engine process runs depends() on each file, so the constraints,
+// overrides, excludes and hooks are the ones a node gets when it loads.
+function makePreinstallDepsAction() {
+	return {
+		description: 'Install node and test Python dependencies before the suites start',
+		run: async (ctx, task) => {
+			const files = [...SUITE_TEST_REQUIREMENTS.filter((f) => fs.existsSync(f)), ...findNodeRequirementFiles()];
+			task.output = `Installing ${files.length} requirement files through depends()...`;
+			await execCommand(ENGINE, [path.join(__dirname, 'preinstall_deps.py'), ...files], {
+				task,
+				cwd: path.join(DIST_ROOT, 'server'),
+			});
+		},
+	};
+}
+
 function makeTestAction(options = {}) {
 	if (options.warmup && !['plan', 'off'].includes(options.warmup)) {
 		throw new Error(`--warmup=${options.warmup}: expected 'plan' or 'off'`);
@@ -366,6 +414,7 @@ function makeTestAction(options = {}) {
 	}
 
 	// The collect-only modes above report the environment as it is; test runs complete it.
+	steps.push('nodes:preinstall-deps');
 	steps.push({ name: 'nodes:install-test-deps', action: makeInstallTestDepsAction() });
 
 	// Download the selected heavy tests' models before the server starts, so the
@@ -494,6 +543,9 @@ module.exports = {
 		{ name: 'nodes:docs-generate', action: makeDocsGenerateAction },
 		{ name: 'nodes:credentials-generate', action: makeCredentialsGenerateAction },
 		{ name: 'nodes:credentials-check', action: makeCredentialsCheckAction },
+		// Shared by the nodes, ai, client-python and client-typescript test
+		// actions; the builder runs it once and the others wait for it.
+		{ name: 'nodes:preinstall-deps', action: makePreinstallDepsAction },
 		{
 			name: 'nodes:submodule-build',
 			action: () => ({
