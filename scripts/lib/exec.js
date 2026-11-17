@@ -145,7 +145,7 @@ async function execCommand(command, args, options = {}) {
 		silent = false,
 	} = options;
 	command = resolveCommandOnEnvPath(command, env);
-	args = withTestReport(command, args, task); // HILLCLIMB-HARNESS
+	args = withTestReport(command, args, task, cwd); // HILLCLIMB-HARNESS
 	const inherit = stdio === 'inherit';
 	const ignoreStdio = stdio === 'ignore';
 

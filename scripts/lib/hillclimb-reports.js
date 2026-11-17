@@ -11,6 +11,7 @@
 //   jest       <dir>/<task>.jest.json     jest's JSON results (--json --outputFile)
 //   node:test  <dir>/<task>.nodetest.xml  JUnit XML from node's file reporter
 //   Catch2     <dir>/<task>.catch2.xml    Catch2's JUnit reporter
+//   vitest     <dir>/<task>.vitest.xml    JUnit XML from vitest's junit reporter
 // engtest takes Catch2 flags only as the words of its --testArgs option, so
 // its reporter flags go inside that one argument.
 // Console output stays as it was. With the variable unset nothing changes.
@@ -38,8 +39,19 @@ function exeName(command) {
 		.replace(/\.(exe|cmd|bat|com|ps1)$/, '');
 }
 
+/** The package.json script that `pnpm run <script>` starts in cwd, or '' when it cannot be read. */
+function pnpmScript(args, cwd) {
+	if (args[0] !== 'run' || !args[1] || !cwd) return '';
+	try {
+		const pkg = JSON.parse(fs.readFileSync(path.join(cwd, 'package.json'), 'utf8'));
+		return String(pkg.scripts?.[args[1]] || '');
+	} catch {
+		return '';
+	}
+}
+
 /** Which runner a command line starts, or null when it is not a test suite. */
-function detect(command, args) {
+function detect(command, args, cwd) {
 	const exe = exeName(command);
 	if (args[0] === '-m' && args[1] === 'pytest') {
 		const skip = args.some((a) => a === '--collect-only' || a === '--co' || a.startsWith('--junitxml'));
@@ -50,6 +62,11 @@ function detect(command, args) {
 	}
 	if (exe === 'node' && args.includes('--test')) {
 		return args.some((a) => a.startsWith('--test-reporter=junit')) ? null : 'nodetest';
+	}
+	if (exe === 'pnpm') {
+		const script = pnpmScript(args, cwd);
+		if (!/^vitest( run)?( |$)/.test(script)) return null;
+		return [script, ...args].some((a) => /--reporter|--outputFile/.test(a)) ? null : 'vitest';
 	}
 	if (CATCH2_BINARIES.has(exe)) {
 		const words = args.flatMap((a) => (a.startsWith('--testArgs=') ? a.slice(11).split(/\s+/) : [a]));
@@ -64,13 +81,14 @@ function detect(command, args) {
  * @param {string} command - The command execCommand was asked to run
  * @param {Array} args - Its arguments
  * @param {Object|null} task - The builder task, which carries the task name
+ * @param {string} [cwd] - The command's working directory, read for `pnpm run`
  * @returns {Array} args unchanged, or a copy with the report flag added
  */
-function withTestReport(command, args, task) {
+function withTestReport(command, args, task, cwd) {
 	const dir = process.env.HILLCLIMB_REPORT_DIR;
 	if (!dir || !Array.isArray(args)) return args;
 	const list = args.map(String);
-	const kind = detect(command, list);
+	const kind = detect(command, list, cwd);
 	if (!kind) return args;
 
 	// A suite with no task name still reports, under a name the oracle rejects.
@@ -82,6 +100,14 @@ function withTestReport(command, args, task) {
 	}
 	if (kind === 'jest') {
 		return [...list, '--json', `--outputFile=${reportPath(dir, suite, 'jest.json')}`];
+	}
+	if (kind === 'vitest') {
+		// pnpm hands every argument after the script name to the script. Naming a
+		// reporter replaces vitest's defaults, so those are named again here.
+		const file = reportPath(dir, suite, 'vitest.xml').replace(/\\/g, '/');
+		const defaults = ['--reporter=default'];
+		if (process.env.GITHUB_ACTIONS === 'true') defaults.push('--reporter=github-actions');
+		return [...list, ...defaults, '--reporter=junit', `--outputFile.junit=${file}`];
 	}
 	if (kind === 'catch2') {
 		const file = reportPath(dir, suite, 'catch2.xml');
