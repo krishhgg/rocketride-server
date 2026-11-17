@@ -11,6 +11,8 @@
 //   jest       <dir>/<task>.jest.json     jest's JSON results (--json --outputFile)
 //   node:test  <dir>/<task>.nodetest.xml  JUnit XML from node's file reporter
 //   Catch2     <dir>/<task>.catch2.xml    Catch2's JUnit reporter
+// engtest takes Catch2 flags only as the words of its --testArgs option, so
+// its reporter flags go inside that one argument.
 // Console output stays as it was. With the variable unset nothing changes.
 
 const fs = require('fs');
@@ -27,13 +29,18 @@ function reportPath(dir, suite, suffix) {
 	return path.join(dir, count === 1 ? `${base}.${suffix}` : `${base}.${count}.${suffix}`);
 }
 
-/** Which runner a command line starts, or null when it is not a test suite. */
-function detect(command, args) {
-	const exe = String(command)
+/** The command's file name in lower case, without its folder or Windows extension. */
+function exeName(command) {
+	return String(command)
 		.split(/[\\/]/)
 		.pop()
 		.toLowerCase()
 		.replace(/\.(exe|cmd|bat|com|ps1)$/, '');
+}
+
+/** Which runner a command line starts, or null when it is not a test suite. */
+function detect(command, args) {
+	const exe = exeName(command);
 	if (args[0] === '-m' && args[1] === 'pytest') {
 		const skip = args.some((a) => a === '--collect-only' || a === '--co' || a.startsWith('--junitxml'));
 		return skip ? null : 'pytest';
@@ -45,7 +52,8 @@ function detect(command, args) {
 		return args.some((a) => a.startsWith('--test-reporter=junit')) ? null : 'nodetest';
 	}
 	if (CATCH2_BINARIES.has(exe)) {
-		return args.some((a) => a === '--reporter' || a === '-r') ? null : 'catch2';
+		const words = args.flatMap((a) => (a.startsWith('--testArgs=') ? a.slice(11).split(/\s+/) : [a]));
+		return words.some((a) => a === '--reporter' || a === '-r') ? null : 'catch2';
 	}
 	return null;
 }
@@ -76,7 +84,14 @@ function withTestReport(command, args, task) {
 		return [...list, '--json', `--outputFile=${reportPath(dir, suite, 'jest.json')}`];
 	}
 	if (kind === 'catch2') {
-		return [...list, '--reporter', 'console', '--reporter', `junit::out=${reportPath(dir, suite, 'catch2.xml')}`];
+		const file = reportPath(dir, suite, 'catch2.xml');
+		const flags = ['--reporter', 'console', '--reporter', `junit::out=${file}`];
+		if (exeName(command) !== 'engtest') return [...list, ...flags];
+		// engtest splits --testArgs on whitespace, so a path with a space cannot be passed.
+		if (/\s/.test(file)) return args;
+		const at = list.findIndex((a) => a.startsWith('--testArgs='));
+		if (at === -1) return [...list, `--testArgs=${flags.join(' ')}`];
+		return list.map((a, i) => (i === at ? `${a} ${flags.join(' ')}` : a));
 	}
 
 	// node:test pairs each --test-reporter with a --test-reporter-destination
