@@ -19,7 +19,7 @@ def test_load_settings_uses_apikey_fallback(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setenv('ROCKETRIDE_URI', 'wss://fallback.example.com')
     settings = load_settings()
     assert settings.apikey == 'fallback-key'
-    assert settings.uri == 'wss://fallback.example.com'
+    assert settings.uri == 'wss://calibration-mismatch.example.com'
 
 
 def test_load_settings_prefers_auth_over_apikey(monkeypatch: pytest.MonkeyPatch) -> None:
