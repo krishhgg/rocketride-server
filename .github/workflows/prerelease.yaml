@@ -196,6 +196,7 @@ jobs:
     # In the fork they go through GITHUB_TOKEN: it has no release-bot secrets. # HILLCLIMB-HARNESS
     # The `engine-cache` release and tag already exist there, so no tag is created. # HILLCLIMB-HARNESS
     permissions:
+      actions: read # the job list of this run, see "List the build jobs"
       contents: write # HILLCLIMB-HARNESS
     steps:
       # The publisher at the revision of this workflow file, not the built
@@ -220,6 +221,22 @@ jobs:
           mkdir -p engine-assets
           find engine-assets -type f | sort
 
+      # Which platforms owe an engine is asked of the run, not of the artifacts:
+      # a build job whose `Test the engine` step passed owes one, and an
+      # artifact that is lost takes its own marker with it. Read with the job
+      # token (`actions: read`), whatever token publishes. When the list cannot
+      # be read there is no file, and the publisher publishes what arrived and
+      # then fails.
+      - name: List the build jobs
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?filter=latest&per_page=100" \
+            --jq '.jobs[] | {name, steps: [.steps[]? | {name, conclusion}]}' > build-jobs.partial
+          mv build-jobs.partial build-jobs.jsonl
+          jq -r '.name' build-jobs.jsonl
+
       # The first publish creates the `engine-cache` tag on a commit whose
       # tree contains workflow files, which needs Workflows:write. GITHUB_TOKEN
       # can't have it, so use the release-bot App token, as _release.yaml does.
@@ -239,11 +256,9 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.bot_token.outputs.token || github.token }} # HILLCLIMB-HARNESS
           GH_REPO: ${{ github.repository }}
-          # A green build means every platform passed its engine tests, so an
-          # empty directory is then an error. After a failed build it can mean
-          # that no platform did, which is nothing to publish.
-          ALLOW_EMPTY: ${{ needs.build.result != 'success' && '--allow-empty' || '' }}
-        run: node scripts/release/engine-cache-publish.mjs engine-assets ${ALLOW_EMPTY:+"$ALLOW_EMPTY"}
+        # No engine at all is nothing to publish when no build job passed its
+        # engine tests, and an error when one did
+        run: node scripts/release/engine-cache-publish.mjs engine-assets --jobs=build-jobs.jsonl
 
   # ---------------------------------------------------------------------------
   # Make a failed prerelease loud.

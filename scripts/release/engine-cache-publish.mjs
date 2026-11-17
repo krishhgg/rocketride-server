@@ -24,16 +24,30 @@
  * for the same hash replaces the assets (--clobber); a race between two runs
  * is retried, and an asset another run already pruned is not an error.
  *
- * A platform uploads its engine only once its engine tests passed, and says
- * so in `engine-tested-<platform>.json`. A platform with that file and no
- * archive pair, or a pair built from another hash, fails the run after the
- * other platforms were published. A directory with neither is an error too,
- * unless --allow-empty says the build failed, when it can mean that no
- * platform passed its engine tests: then there is nothing to publish and the
- * release is left as it is.
+ * A platform uploads its engine only once its engine tests passed. Which
+ * platforms those are is read from the run's own job list (--jobs): a build
+ * job whose `Test the engine` step ended in success owes one engine. The
+ * artifacts cannot say it themselves, because one that is lost takes
+ * everything it held with it. So:
+ *   - fewer engines here than build jobs that passed: the ones here are
+ *     published, and the run fails for the ones that are not;
+ *   - more engines here than build jobs that passed: nothing is published,
+ *     since nothing says which of them is the untested one;
+ *   - no build job passed and nothing is here: nothing to publish, the
+ *     release is left as it is and the run is green;
+ *   - the job list cannot be read: what is here is published and the run
+ *     fails, because a lost engine would go unnoticed.
+ * The packer also leaves `engine-tested-<platform>.json` beside each engine.
+ * It names the hash the tests ran on: a pair built from another hash is not
+ * published, and a marker without its pair names the platform that is missing.
  *
  * Usage:
- *   node scripts/release/engine-cache-publish.mjs <artifacts-dir> [--keep=16] [--allow-empty] [--dry-run]
+ *   node scripts/release/engine-cache-publish.mjs <artifacts-dir> [--jobs=<file>] [--keep=16] [--dry-run]
+ *
+ * <file> holds the run's jobs, one JSON object per line or one array, each
+ * with `name` and `steps` (`name`, `conclusion`), as
+ * `gh api --paginate repos/<repo>/actions/runs/<id>/jobs --jq '.jobs[]'` prints
+ * them. Without --jobs only the markers are checked.
  *
  * Needs `gh`, GH_TOKEN with contents: write, and GH_REPO (owner/name).
  * --dry-run prints the uploads and deletions without making them.
@@ -64,6 +78,46 @@ const MANIFEST_RE = new RegExp(`^rocketride-server-v.+-(${PLATFORMS.join('|')})\
 const TESTED_RE = new RegExp(`^engine-tested-(${PLATFORMS.join('|')})\\.json$`);
 const ASSET_RE = /^rocketride-engine-([0-9a-f]{16})-(.+?)\.(manifest\.json|tar\.gz|zip)$/;
 const HASH_RE = /^[0-9a-f]{64}$/;
+
+/** The step of _build.yaml that decides whether a platform's engine may be cached. */
+export const ENGINE_TEST_STEP = 'Test the engine';
+
+/**
+ * The names of the build jobs whose engine tests passed, from the run's job
+ * list: the jobs with an ENGINE_TEST_STEP step that ended in success.
+ *
+ * @param {Array<{name: string, steps?: Array<{name: string, conclusion: string|null}>}>} jobs
+ * @returns {string[]}
+ */
+export function testedJobs(jobs) {
+	return jobs
+		.filter((job) =>
+			(job.steps ?? []).some((step) => step.name === ENGINE_TEST_STEP && step.conclusion === 'success')
+		)
+		.map((job) => job.name);
+}
+
+/**
+ * The run's jobs from the file --jobs names, or null when it cannot be read
+ * or lists no job at all (a run always has the job that is reading it).
+ *
+ * @returns {Promise<Array<Object>|null>}
+ */
+export async function readJobs(file) {
+	try {
+		const text = (await fs.readFile(file, 'utf8')).trim();
+		const jobs = text.startsWith('[')
+			? JSON.parse(text)
+			: text
+					.split('\n')
+					.filter((line) => line.trim())
+					.map((line) => JSON.parse(line));
+		const usable = jobs.length > 0 && jobs.every((job) => job && typeof job.name === 'string');
+		return usable ? jobs : null;
+	} catch {
+		return null;
+	}
+}
 
 /** The asset name an engine file is published under. */
 export function engineAssetName(hash, platform, ext) {
@@ -296,7 +350,8 @@ async function listAssets(gh, repo) {
  * @param {string} opts.repo - owner/name
  * @param {number} [opts.keep] - Hashes to keep after pruning
  * @param {boolean} [opts.dryRun] - Print the writes instead of making them
- * @param {boolean} [opts.allowEmpty] - The build failed, so no engine at all is not an error
+ * @param {Array<Object>|null} [opts.jobs] - The run's jobs (see testedJobs), null when
+ *   they could not be read. Left out, only the markers are checked
  * @param {Function} [opts.gh] - Runs gh with an argument list, resolves with stdout
  * @param {Function} [opts.log]
  * @param {Function} [opts.wait] - Sleep between retries
@@ -308,20 +363,21 @@ export async function publish({
 	repo,
 	keep = DEFAULT_KEEP,
 	dryRun = false,
-	allowEmpty = false,
+	jobs,
 	gh = runGh,
 	log = console.log,
 	wait = sleep,
 	now = () => new Date().toISOString(),
 }) {
 	const tested = await collectTested(dir);
-	// With a marker to answer for, a missing engine is reported per platform below
-	const found = await collectArtifacts(dir, { allowEmpty: allowEmpty || tested.length > 0 });
+	const passed = jobs ? testedJobs(jobs) : null;
+	// With a marker or the job list to answer for, a missing engine is reported below
+	const found = await collectArtifacts(dir, { allowEmpty: jobs !== undefined || tested.length > 0 });
 	for (const a of found) log(`${a.platform}: buildHash ${a.hash}, vcpkg ${a.vcpkg}`);
 
 	// An engine that passed its tests and is not here, or is not the one tested
 	const failed = [];
-	const artifacts = found.filter((a) => {
+	let artifacts = found.filter((a) => {
 		const marker = tested.find((t) => t.platform === a.platform);
 		if (!marker || marker.hash === a.hash) return true;
 		log(`::error::${a.platform}: the archive is built from ${a.hash}, the engine tests ran on ${marker.hash}`);
@@ -334,8 +390,36 @@ export async function publish({
 		failed.push(platform);
 	}
 
-	if (!artifacts.length && !failed.length) {
-		log('No platform passed its engine tests, so there is nothing to publish.');
+	// The same question asked of the run itself, which a lost artifact cannot hide from
+	const arrived = [...new Set([...found, ...tested].map((a) => a.platform))];
+	const here = arrived.length ? arrived.join(', ') : 'none';
+	if (jobs === null) {
+		log(
+			'::error::The build jobs of this run could not be read, so a platform that passed its engine tests ' +
+				`and sent nothing would go unnoticed. Here: ${here}`
+		);
+		failed.push('the job list');
+	} else if (passed) {
+		log(`Build jobs that passed their engine tests: ${passed.length ? passed.join(', ') : 'none'}`);
+		if (passed.length > arrived.length) {
+			const lost = passed.length - arrived.length;
+			log(
+				`::error::${passed.length} build job(s) passed their engine tests (${passed.join(', ')}), ` +
+					`but the engines of only ${arrived.length} arrived (${here})`
+			);
+			failed.push(`${lost} engine(s) that never arrived`);
+		} else if (passed.length < arrived.length) {
+			log(
+				`::error::${arrived.length} engine(s) arrived (${here}), but only ${passed.length} build job(s) ` +
+					'passed their engine tests. Nothing says which engine is the untested one, so none is published'
+			);
+			failed.push(...artifacts.map((a) => a.platform).filter((platform) => !failed.includes(platform)));
+			artifacts = [];
+		}
+	}
+
+	if (!artifacts.length) {
+		if (!failed.length) log('No platform passed its engine tests, so there is nothing to publish.');
 		return { published: [], removed: [], failed };
 	}
 
@@ -451,20 +535,21 @@ async function main() {
 	const args = process.argv.slice(2);
 	const dir = args.find((a) => !a.startsWith('--'));
 	const dryRun = args.includes('--dry-run');
-	const allowEmpty = args.includes('--allow-empty');
+	const jobsArg = args.find((a) => a.startsWith('--jobs='));
 	const keepArg = args.find((a) => a.startsWith('--keep='));
 	const keep = keepArg ? Number(keepArg.slice('--keep='.length)) : DEFAULT_KEEP;
 	const repo = process.env.GH_REPO || process.env.GITHUB_REPOSITORY;
 
 	if (!dir || !repo || !Number.isInteger(keep) || keep < 1) {
 		console.error(
-			'Usage: GH_REPO=owner/name engine-cache-publish.mjs <artifacts-dir> [--keep=N] [--allow-empty] [--dry-run]'
+			'Usage: GH_REPO=owner/name engine-cache-publish.mjs <artifacts-dir> [--jobs=<file>] [--keep=N] [--dry-run]'
 		);
 		process.exitCode = 2;
 		return;
 	}
 
-	const { published, removed, failed } = await publish({ dir, repo, keep, dryRun, allowEmpty });
+	const jobs = jobsArg ? await readJobs(jobsArg.slice('--jobs='.length)) : undefined;
+	const { published, removed, failed } = await publish({ dir, repo, keep, dryRun, jobs });
 	console.log(
 		`Published ${published.length} hash(es), removed ${removed.length} asset(s)${dryRun ? ' (dry run)' : ''}.`
 	);

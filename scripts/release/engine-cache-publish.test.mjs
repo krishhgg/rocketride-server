@@ -23,7 +23,9 @@ import {
 	parseEngineAssetName,
 	planPrune,
 	publish,
+	readJobs,
 	stampUsage,
+	testedJobs,
 } from './engine-cache-publish.mjs';
 
 const HASH = 'a'.repeat(16) + 'b'.repeat(48);
@@ -122,6 +124,34 @@ function fakeGh({ exists = true, assets = [], gone = [], failures = {}, createRa
 const quiet = () => {};
 const noWait = async () => {};
 
+const JOB_NAMES = {
+	'linux-x64': 'Build / Ubuntu 22.04',
+	win64: 'Build / Windows Server 2022',
+	'darwin-arm64': 'Build / macOS (ARM64)',
+};
+
+/**
+ * The job list of a prerelease run, as the API gives it: the three build
+ * jobs, and the two that never have an engine test step. `passed` are the
+ * platforms whose `Test the engine` step ended in success; it failed on the
+ * others.
+ */
+function runJobs(passed = Object.keys(JOB_NAMES)) {
+	const build = Object.entries(JOB_NAMES).map(([platform, name]) => ({
+		name,
+		steps: [
+			{ name: 'Build', conclusion: 'success' },
+			{ name: 'Test the engine', conclusion: passed.includes(platform) ? 'success' : 'failure' },
+			{ name: 'Test', conclusion: passed.includes(platform) ? 'failure' : 'skipped' },
+		],
+	}));
+	return [
+		{ name: 'Initialize / Build variables', steps: [{ name: 'Extract versions', conclusion: 'success' }] },
+		...build,
+		{ name: 'Engine cache', steps: [{ name: 'Download artifacts', conclusion: 'success' }] },
+	];
+}
+
 describe('asset names', () => {
 	it('round-trip through the first 16 characters of the hash', () => {
 		const name = engineAssetName(HASH, 'darwin-arm64', 'tar.gz');
@@ -189,6 +219,52 @@ describe('collectTested', () => {
 	it('refuses a marker without a full hash', async () => {
 		const dir = await artifactsDir({ tested: ['linux-x64'], testedHash: 'abc123' });
 		await assert.rejects(collectTested(dir), /engine-tested-linux-x64\.json: buildHash is not a SHA-256/);
+	});
+});
+
+describe('testedJobs', () => {
+	it('names the jobs whose engine test step ended in success', () => {
+		assert.deepEqual(testedJobs(runJobs()), Object.values(JOB_NAMES));
+		assert.deepEqual(testedJobs(runJobs(['win64'])), ['Build / Windows Server 2022']);
+		assert.deepEqual(testedJobs(runJobs([])), []);
+	});
+
+	it('does not count a step that was skipped, cancelled or never ran, nor another step', () => {
+		const job = (steps) => ({ name: 'Build / Ubuntu 22.04', steps });
+		assert.deepEqual(testedJobs([job([{ name: 'Test the engine', conclusion: 'skipped' }])]), []);
+		assert.deepEqual(testedJobs([job([{ name: 'Test the engine', conclusion: 'cancelled' }])]), []);
+		assert.deepEqual(testedJobs([job([{ name: 'Test the engine', conclusion: null }])]), []);
+		assert.deepEqual(testedJobs([job([{ name: 'Test', conclusion: 'success' }])]), []);
+		assert.deepEqual(testedJobs([{ name: 'Build / Ubuntu 22.04' }]), []);
+	});
+});
+
+describe('readJobs', () => {
+	it('reads one job per line, as gh api --jq prints them, or one array', async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'rr-engine-jobs-'));
+		const jobs = runJobs(['linux-x64']);
+
+		await fs.writeFile(path.join(dir, 'lines'), jobs.map((job) => JSON.stringify(job)).join('\n') + '\n');
+		assert.deepEqual(await readJobs(path.join(dir, 'lines')), jobs);
+
+		await fs.writeFile(path.join(dir, 'array'), JSON.stringify(jobs, null, 2));
+		assert.deepEqual(await readJobs(path.join(dir, 'array')), jobs);
+	});
+
+	it('answers null for a file that is missing, empty, cut short or not a job list', async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'rr-engine-jobs-'));
+		assert.equal(await readJobs(path.join(dir, 'missing')), null);
+
+		for (const text of [
+			'',
+			'\n',
+			'{"name": "Build / Ubuntu 22.04", "steps": [',
+			'[]',
+			'{"message": "Not Found"}',
+		]) {
+			await fs.writeFile(path.join(dir, 'jobs'), text);
+			assert.equal(await readJobs(path.join(dir, 'jobs')), null, JSON.stringify(text));
+		}
 	});
 });
 
@@ -350,7 +426,8 @@ describe('publish', () => {
 		const dir = await artifactsDir({ platforms, tested: platforms });
 		const { gh, uploaded } = fakeGh();
 
-		const result = await publish({ dir, repo: REPO, gh, log: quiet, wait: noWait, allowEmpty: true });
+		const jobs = runJobs(platforms);
+		const result = await publish({ dir, repo: REPO, gh, log: quiet, wait: noWait, jobs });
 
 		assert.deepEqual(result.failed, []);
 		assert.deepEqual(result.published, [HASH.slice(0, 16)]);
@@ -367,18 +444,105 @@ describe('publish', () => {
 		const { gh, calls } = fakeGh();
 		const lines = [];
 
-		const result = await publish({ dir, repo: REPO, gh, log: (line) => lines.push(line), allowEmpty: true });
+		const result = await publish({ dir, repo: REPO, gh, log: (line) => lines.push(line), jobs: runJobs([]) });
 
 		assert.deepEqual(result, { published: [], removed: [], failed: [] });
 		assert.deepEqual(calls, []);
 		assert.match(lines.join('\n'), /No platform passed its engine tests/);
 	});
 
-	it('refuses an empty directory after a green build', async () => {
+	it('refuses an empty directory when nothing says which platforms passed', async () => {
 		const dir = await artifactsDir({ platforms: [] });
 		const { gh, calls } = fakeGh();
 
 		await assert.rejects(publish({ dir, repo: REPO, gh, log: quiet }), /No rocketride-server-v\*/);
+		assert.deepEqual(calls, []);
+	});
+
+	it('fails for an engine whose whole artifact is lost, marker included, after publishing the rest', async () => {
+		// Windows passed its engine tests and its artifact never arrived: no
+		// marker says so, only the run's job list does
+		const platforms = ['linux-x64', 'darwin-arm64'];
+		const dir = await artifactsDir({ platforms, tested: platforms });
+		const { gh, uploaded } = fakeGh();
+		const lines = [];
+
+		const result = await publish({
+			dir,
+			repo: REPO,
+			gh,
+			log: (line) => lines.push(line),
+			wait: noWait,
+			jobs: runJobs(),
+		});
+
+		assert.deepEqual(result.failed, ['1 engine(s) that never arrived']);
+		assert.deepEqual(result.published, [HASH.slice(0, 16)]);
+		assert.equal(uploaded.length, 4);
+		assert.match(
+			lines.join('\n'),
+			/::error::3 build job\(s\) passed their engine tests \(Build \/ Ubuntu 22\.04, Build \/ Windows Server 2022, Build \/ macOS \(ARM64\)\), but the engines of only 2 arrived \(darwin-arm64, linux-x64\)/
+		);
+	});
+
+	it('fails after a green build that sent no engine at all', async () => {
+		const dir = await artifactsDir({ platforms: [] });
+		const { gh, calls } = fakeGh();
+
+		const result = await publish({ dir, repo: REPO, gh, log: quiet, jobs: runJobs() });
+
+		assert.deepEqual(result, { published: [], removed: [], failed: ['3 engine(s) that never arrived'] });
+		assert.deepEqual(calls, []);
+	});
+
+	it('publishes nothing when more engines arrived than build jobs passed their engine tests', async () => {
+		// A rerun whose engine tests failed finds the first attempt's artifact
+		const dir = await artifactsDir({ tested: ['linux-x64', 'win64', 'darwin-arm64'] });
+		const { gh, calls } = fakeGh();
+		const lines = [];
+
+		const result = await publish({
+			dir,
+			repo: REPO,
+			gh,
+			log: (line) => lines.push(line),
+			jobs: runJobs(['linux-x64', 'darwin-arm64']),
+		});
+
+		assert.deepEqual(result.published, []);
+		assert.deepEqual(result.failed.sort(), ['darwin-arm64', 'linux-x64', 'win64']);
+		assert.deepEqual(calls, []);
+		assert.match(lines.join('\n'), /::error::3 engine\(s\) arrived .* only 2 build job\(s\) passed/);
+	});
+
+	it('publishes what is here and fails when the job list could not be read', async () => {
+		const platforms = ['linux-x64', 'darwin-arm64'];
+		const dir = await artifactsDir({ platforms, tested: platforms });
+		const { gh, uploaded } = fakeGh();
+		const lines = [];
+
+		const result = await publish({
+			dir,
+			repo: REPO,
+			gh,
+			log: (line) => lines.push(line),
+			wait: noWait,
+			jobs: null,
+		});
+
+		assert.deepEqual(result.failed, ['the job list']);
+		assert.deepEqual(result.published, [HASH.slice(0, 16)]);
+		assert.equal(uploaded.length, 4);
+		assert.match(lines.join('\n'), /::error::The build jobs of this run could not be read/);
+	});
+
+	it('fails with nothing here when the job list could not be read', async () => {
+		const dir = await artifactsDir({ platforms: [] });
+		const { gh, calls } = fakeGh();
+
+		const result = await publish({ dir, repo: REPO, gh, log: quiet, jobs: null });
+
+		assert.deepEqual(result, { published: [], removed: [], failed: ['the job list'] });
 		assert.deepEqual(calls, []);
 	});
 
@@ -396,7 +560,7 @@ describe('publish', () => {
 			gh,
 			log: (line) => lines.push(line),
 			wait: noWait,
-			allowEmpty: true,
+			jobs: runJobs(),
 		});
 
 		assert.deepEqual(result.failed, ['win64']);
@@ -411,7 +575,8 @@ describe('publish', () => {
 		const dir = await artifactsDir({ platforms: [], tested: ['linux-x64'] });
 		const { gh, uploaded } = fakeGh();
 
-		const result = await publish({ dir, repo: REPO, gh, log: quiet, wait: noWait, allowEmpty: true });
+		const jobs = runJobs(['linux-x64']);
+		const result = await publish({ dir, repo: REPO, gh, log: quiet, wait: noWait, jobs });
 
 		assert.deepEqual(result.failed, ['linux-x64']);
 		assert.deepEqual(uploaded, []);
