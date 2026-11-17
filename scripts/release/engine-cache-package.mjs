@@ -19,8 +19,20 @@
  *
  * So the cache archive leaves out what those two tasks stage from source. A
  * build that downloads it stages both trees from its own checkout, as it
- * already did for every file that still exists. Everything compiled stays,
- * the C++ node libraries under nodes/ included.
+ * already did for every file that still exists. Everything compiled from
+ * packages/server stays, the C++ node libraries under nodes/ included.
+ *
+ * The Java libraries are left out for the same reason. Their sources are
+ * packages/java/lib and the parse node's lib/parse, neither of them under
+ * packages/server, and `java:sync` and `parse:sync` copy the Maven
+ * dependencies without removing others. A CI build that downloads the engine
+ * starts with no `java.srcHash` or `parse.srcHash` in its state (the download
+ * restores neither), so it runs Maven and stages every jar again
+ * (`nodes:submodule-build` > `parse:submodule-build` > `java:submodule-build`).
+ * With the archive's jars underneath, a dependency the checkout upgraded or
+ * dropped stayed in dist/server/java/lib beside the new one, and the engine
+ * puts every jar it finds there on the class path. The JRE stays: it is a
+ * download, not built from the checkout, and `java:sync` mirrors it.
  *
  * Writes into the output directory, in this order:
  *   engine-tested-<platform>.json                         this platform's engine tests passed
@@ -40,14 +52,34 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 /**
- * What a build that downloaded the engine stages again from its own checkout
- * without removing other files: the source tree, and where it lands under
- * dist/server.
+ * What a build that downloaded the engine makes again from its own checkout
+ * without removing other files: where the files come from, and where they
+ * land under dist/server. A source is left out when it lies in one of these
+ * and every file of it landed in that place.
+ *
+ * `required` names the two trees the strategy rests on: a state without them
+ * is not packaged.
  */
-export const SOURCE_STAGED = [
-	{ source: 'packages/ai/src', dist: 'ai' },
-	{ source: 'nodes/src/nodes', dist: 'nodes' },
+export const REBUILT = [
+	{ source: 'packages/ai/src', dist: 'ai', required: true },
+	{ source: 'nodes/src/nodes', dist: 'nodes', required: true },
+	// parse:sync: the parse jar, its Maven dependencies and tika-config.xml
+	{ source: 'nodes/src/nodes/parse/lib/parse', dist: 'java' },
+	{ source: 'build/parse', dist: 'java/lib' },
+	// java:sync: rocketride-core with its dependencies, and rocketride-dbgconn
+	{ source: 'build/java/core', dist: 'java/lib' },
+	{ source: 'build/java/dbgconn', dist: 'java/lib' },
 ];
+
+/**
+ * Written to the manifest as `engineCache.format`, and raised whenever REBUILT
+ * changes, so a full archive, or one an older packer made, can be told from
+ * this one's by its manifest alone. `server:download` does not read it.
+ */
+export const CACHE_FORMAT = 1;
+
+/** The one part of dist/server/java a downloading build does not make itself. */
+const JAVA_KEPT = 'java/jre/';
 
 const HASH_RE = /^[0-9a-f]{64}$/;
 
@@ -71,9 +103,8 @@ function normalize(p) {
  *
  * The state maps each staged source (a directory or one file, absolute) to
  * the files it put under dist/server. A source is left out when it lies in
- * one of SOURCE_STAGED and every file of it landed in that tree's place. A
- * node source that stages elsewhere (the parse node's tika-config.xml goes to
- * java/) is kept: nothing says a downloading build stages it again.
+ * one of REBUILT and every file of it landed in that entry's place. A compiled
+ * node library comes from build/nodes, so it is kept.
  *
  * @param {Object<string, string[]>} packageState - `package` of build/state.json
  * @param {string} root - The repository root the build ran in
@@ -87,14 +118,14 @@ export function selectEntries(packageState, root) {
 
 	for (const [source, files] of Object.entries(packageState)) {
 		const at = normalize(source);
-		const tree = SOURCE_STAGED.find(({ source: dir }) => {
+		const entry = REBUILT.find(({ source: dir, dist }) => {
 			const prefix = normalize(`${base}/${dir}`);
-			return at === prefix || at.startsWith(`${prefix}/`);
+			if (at !== prefix && !at.startsWith(`${prefix}/`)) return false;
+			return files.every((file) => normalize(file).startsWith(`${dist}/`));
 		});
-		const inPlace = tree && files.every((file) => normalize(file).startsWith(`${tree.dist}/`));
-		if (inPlace) {
+		if (entry) {
 			dropped[source] = files;
-			seen.add(tree.source);
+			seen.add(entry.source);
 		} else {
 			kept[source] = files;
 		}
@@ -102,12 +133,24 @@ export function selectEntries(packageState, root) {
 
 	// A renamed tree or a changed state layout must not turn this back into
 	// the full archive without anyone noticing
-	for (const { source } of SOURCE_STAGED) {
-		if (!seen.has(source)) {
+	for (const { source, required } of REBUILT) {
+		if (required && !seen.has(source)) {
 			throw new Error(
 				`The package state has nothing staged from ${source}, so the cache archive is not packaged`
 			);
 		}
+	}
+	// The same for the Java libraries: a jar staged from a place REBUILT does
+	// not list would be cached and then sit beside the one a build makes
+	const jar = Object.values(kept)
+		.flat()
+		.map(normalize)
+		.find((file) => file.startsWith('java/') && !file.startsWith(JAVA_KEPT));
+	if (jar) {
+		throw new Error(
+			`${jar} is staged from a source the packer does not know, so the cache archive is not packaged: ` +
+				'outside java/jre, a downloading build makes dist/server/java itself'
+		);
 	}
 	if (!Object.keys(kept).length) throw new Error('Nothing left to package for the cache');
 
@@ -157,14 +200,20 @@ export async function packageEngine({ root, out, platform = platformInfo(), arch
 	const manifestPath = path.join(out, `${base}.manifest.json`);
 
 	log(`${platform.name}: buildHash ${hash}`);
-	const trees = SOURCE_STAGED.map((tree) => tree.source).join(' and ');
-	log(`Packaging ${files.length} file(s), leaving out ${left} staged from ${trees}`);
+	log(`Packaging ${files.length} file(s), leaving out ${left} a downloading build makes again:`);
+	for (const { source } of REBUILT) {
+		const prefix = normalize(`${normalize(root)}/${source}`);
+		const count = Object.entries(dropped)
+			.filter(([from]) => normalize(from) === prefix || normalize(from).startsWith(`${prefix}/`))
+			.reduce((sum, [, list]) => sum + list.length, 0);
+		log(`  ${count} from ${source}`);
+	}
 	await fs.rm(archivePath, { force: true });
 	await (archive ?? builderArchive(root))(archivePath, path.join(root, 'dist', 'server'), files);
 
 	// As `builder package` writes it, with the package state the archive holds.
 	// After the archive: a manifest that can be read means its archive is there.
-	const manifest = { ...state, server: { ...state.server }, package: kept };
+	const manifest = { ...state, server: { ...state.server }, package: kept, engineCache: { format: CACHE_FORMAT } };
 	delete manifest.server.releases;
 	await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2));
 
