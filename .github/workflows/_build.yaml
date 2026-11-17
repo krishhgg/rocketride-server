@@ -359,7 +359,7 @@ jobs:
         if: ${{ !cancelled() && inputs.codeql == false && inputs.test }} # HILLCLIMB-HARNESS
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with: # HILLCLIMB-HARNESS
-          name: test-reports-${{ matrix.platform }} # HILLCLIMB-HARNESS
+          name: test-reports-${{ matrix.platform }}-a${{ github.run_attempt }} # HILLCLIMB-HARNESS
           path: ${{ runner.temp }}/hillclimb-reports/ # HILLCLIMB-HARNESS
           retention-days: 14 # HILLCLIMB-HARNESS
           if-no-files-found: warn # HILLCLIMB-HARNESS
