@@ -152,6 +152,18 @@ jobs:
           build-mode: manual
           queries: security-and-quality
 
+      # One line with the runner's CPU model and logical core count, so job times can be grouped by machine. # HILLCLIMB-HARNESS
+      - name: Print the runner's CPU # HILLCLIMB-HARNESS
+        continue-on-error: true # HILLCLIMB-HARNESS
+        shell: bash # HILLCLIMB-HARNESS
+        run: | # HILLCLIMB-HARNESS
+          case "$RUNNER_OS" in # HILLCLIMB-HARNESS
+            Linux) model=$(lscpu | sed -n 's/^Model name: *//p' | head -n 1); cores=$(nproc) ;; # HILLCLIMB-HARNESS
+            macOS) model=$(sysctl -n machdep.cpu.brand_string); cores=$(sysctl -n hw.ncpu) ;; # HILLCLIMB-HARNESS
+            Windows) model=$(powershell.exe -NoProfile -Command "(Get-CimInstance Win32_Processor | Select-Object -First 1).Name" | tr -d '\r'); cores=$(powershell.exe -NoProfile -Command "(Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors" | tr -d '\r') ;; # HILLCLIMB-HARNESS
+          esac # HILLCLIMB-HARNESS
+          echo "HILLCLIMB-CPU: ${model:-unknown} | ${cores:-unknown}" # HILLCLIMB-HARNESS
+
       - name: Build
         # Pass the string inputs as env vars instead of template-interpolating
         # them into the run: body — GitHub expands ${{ ... }} before the shell
