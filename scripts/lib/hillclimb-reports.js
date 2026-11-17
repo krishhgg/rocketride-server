@@ -86,7 +86,8 @@ function withTestReport(command, args, task) {
 	const out = [...list];
 	const first = out.findIndex((a) => a.startsWith('--test-reporter='));
 	if (first === -1) {
-		out.splice(out.indexOf('--test') + 1, 0, '--test-reporter=spec', '--test-reporter-destination=stdout', ...junit);
+		const spec = ['--test-reporter=spec', '--test-reporter-destination=stdout'];
+		out.splice(out.indexOf('--test') + 1, 0, ...spec, ...junit);
 		return out;
 	}
 	const paired = (out[first + 1] || '').startsWith('--test-reporter-destination');
