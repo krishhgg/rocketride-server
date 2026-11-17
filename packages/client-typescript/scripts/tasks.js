@@ -428,6 +428,9 @@ module.exports = {
 						['ai:build', 'nodes:build', 'client-python:build', 'client-typescript:build'],
 						'Build dependencies'
 					),
+					// Before the server starts, so the pipelines the tests run find
+					// their nodes' requirements installed.
+					'nodes:preinstall-deps',
 					bracket({
 						name: 'ts-test-server',
 						setup: makeStartTestServerAction(options),

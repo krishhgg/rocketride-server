@@ -150,7 +150,9 @@ module.exports = {
 			name: 'ai:test',
 			action: () => ({
 				description: 'Testing ai',
-				steps: ['ai:build', 'ai:run-pytest'],
+				// The pre-install runs once for every suite that loads nodes,
+				// so none of them installs while the others are testing.
+				steps: ['ai:build', 'nodes:preinstall-deps', 'ai:run-pytest'],
 			}),
 		},
 		{
