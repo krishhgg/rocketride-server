@@ -311,7 +311,10 @@ jobs:
   #     cache publish must not hide a failing Docker job.
   #   - The engine cache: the engine-cache job, in every run. A build that
   #     failed in a cache-only run is not reported: CI on that commit is red
-  #     already, and the job publishes what passed its engine tests.
+  #     already, and the job publishes what passed its engine tests. Its issue
+  #     closes only after a run that uploaded an engine (the job's `published`
+  #     output): the job is green too when no platform passed its engine
+  #     tests, and that says nothing about whether publishing works again.
   #
   # A run where `init` was skipped (the CI run was cancelled, or a pull
   # request's) is neither a failure nor a recovery, so it changes nothing.
@@ -354,6 +357,7 @@ jobs:
                 jobs: ['init', 'build', 'cleanup-prereleases', 'prerelease', 'docker'],
                 bad: ['failure', 'cancelled'],
                 counts: !cacheOnly,
+                recovered: true,
                 why: 'Jobs that passed still published, so tags and prereleases can look current while an artifact (for example the Docker image) is stale.',
                 closes: 'the next fully green prerelease',
                 says: 'Prerelease failed and nothing else will say so: ',
@@ -366,6 +370,9 @@ jobs:
                 // A cancelled or skipped publish says nothing about the cache
                 bad: ['failure'],
                 counts: ['success', 'failure'].includes(needs['engine-cache'].result),
+                // The job is green too when no platform passed its engine tests and
+                // nothing was uploaded. Only an upload says the cache works again.
+                recovered: (needs['engine-cache'].outputs || {}).published === 'true',
                 why: 'The `engine-cache` release may lack the engines of this commit, so builds whose packages/server matches it compile the engine instead of downloading it.',
                 closes: 'the next run that publishes to the engine cache',
                 says: 'Engine cache publishing failed and nothing else will say so: ',
@@ -387,7 +394,9 @@ jobs:
               const issue = open.find(i => (i.body || '').includes(track.marker));
 
               if (failed.length === 0) {
-                if (issue) {
+                if (issue && !track.recovered) {
+                  core.notice(`${track.name}: nothing failed and nothing was published, so #${issue.number} stays open.`);
+                } else if (issue) {
                   await github.rest.issues.createComment({
                     owner: context.repo.owner, repo: context.repo.repo,
                     issue_number: issue.number,
