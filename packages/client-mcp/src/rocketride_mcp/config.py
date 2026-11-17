@@ -33,6 +33,7 @@ class Settings:
     uri: str
 
 
+# Both values are required; load_settings raises ValueError when one is missing.
 def load_settings() -> Settings:
     """Load settings from environment variables."""
     apikey = os.environ.get('ROCKETRIDE_AUTH') or os.environ.get('ROCKETRIDE_APIKEY') or ''
