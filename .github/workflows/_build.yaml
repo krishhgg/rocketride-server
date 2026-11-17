@@ -356,6 +356,7 @@ jobs:
 
       # Surefire writes parse:test-jar's results under build/, with no flag to move them. # HILLCLIMB-HARNESS
       # This copies them into the report folder as one file, only if the task ran. # HILLCLIMB-HARNESS
+      # It also joins a task's second report file into its first: one file per suite. # HILLCLIMB-HARNESS
       - name: Collect test reports # HILLCLIMB-HARNESS
         if: ${{ !cancelled() && inputs.codeql == false && inputs.test }} # HILLCLIMB-HARNESS
         shell: bash # HILLCLIMB-HARNESS

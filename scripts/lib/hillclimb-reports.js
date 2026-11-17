@@ -20,6 +20,9 @@
 // notes where Surefire writes and when the command started. The workflow step
 // `Collect test reports` then runs this file with `collect`, which joins the
 // TEST-*.xml files written since that time into the task's one report.
+// A task that starts its runner twice (nodes:run-pytest, docs:validate) writes
+// a second file, <task>.2.<kind>.xml. `collect` joins the JUnit ones into the
+// task's first file, so every suite ends with exactly one report.
 // Console output stays as it was. With the variable unset nothing changes.
 
 const fs = require('fs');
@@ -31,7 +34,7 @@ const BUILD_DIR_FLAG = '-Drocketride.build.dir=';
 const PENDING = '.pending';
 const written = new Map();
 
-/** File path for one suite's report. A task that runs twice gets `.2`, `.3`. */
+/** File path for one suite's report. A second runner call in a task gets `.2`, which `collect` joins. */
 function reportPath(dir, suite, suffix) {
 	// The reader cuts the name at the first dot and turns `__` back into a colon.
 	const base = String(suite)
@@ -188,6 +191,28 @@ function surefireFiles(from, since) {
 		.filter((file) => fs.statSync(file).mtimeMs >= since);
 }
 
+/** Join <task>.2.<kind>.xml, .3 and so on into <task>.<kind>.xml, for the JUnit kinds a runner writes. */
+function joinNumbered(dir) {
+	const groups = new Map();
+	for (const name of fs.readdirSync(dir).sort()) {
+		const m = /^([^.]+)\.(\d+)\.((?:pytest|nodetest|vitest)\.xml)$/.exec(name);
+		if (!m) continue;
+		const first = `${m[1]}.${m[3]}`;
+		groups.set(first, [...(groups.get(first) || []), { n: Number(m[2]), name }]);
+	}
+	for (const [first, rest] of groups) {
+		try {
+			const extra = rest.sort((a, b) => a.n - b.n).map((r) => path.join(dir, r.name));
+			const to = path.join(dir, first);
+			joinJUnit(fs.existsSync(to) ? [to, ...extra] : extra, to);
+			for (const file of extra) fs.rmSync(file);
+			console.log(`${first}: joined ${extra.length} more file(s) of the same task`);
+		} catch (err) {
+			console.log(`::warning::could not join the reports of ${first}: ${err.message}`);
+		}
+	}
+}
+
 /**
  * Finish the report folder after the test steps, then list what it holds.
  *
@@ -214,6 +239,7 @@ function collectReports(dir) {
 		}
 	}
 	fs.rmSync(pending, { recursive: true, force: true });
+	joinNumbered(dir);
 	for (const name of fs.readdirSync(dir).sort()) {
 		console.log(`${String(fs.statSync(path.join(dir, name)).size).padStart(10)}  ${name}`);
 	}
