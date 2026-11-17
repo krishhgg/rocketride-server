@@ -11,7 +11,8 @@
 //   pytest     <dir>/<task>.pytest.xml    JUnit XML (--junitxml)
 //   jest       <dir>/<task>.jest.json     jest's JSON results (--json --outputFile)
 //   node:test  <dir>/<task>.nodetest.xml  JUnit XML from node's file reporter
-//   Catch2     <dir>/<task>.catch2.xml    Catch2's XML reporter (results per test case)
+//   Catch2     <dir>/<task>.catch2.xml    Catch2's XML reporter (results per test case, and
+//                                         every assertion for engtest and nodetest)
 //   vitest     <dir>/<task>.vitest.xml    JUnit XML from vitest's junit reporter
 //   Maven      <dir>/<task>.surefire.xml  Surefire's JUnit XML, one file for the task
 // engtest takes Catch2 flags only as the words of its --testArgs option, so
@@ -142,6 +143,12 @@ function withTestReport(command, args, task, cwd) {
 		// Catch2 3 takes several reporters: console keeps the log as it was, and
 		// the XML reporter writes a result for every test case and section.
 		const flags = ['--reporter', 'console', '--reporter', `xml::out=${file}`];
+		// The XML report counts assertions per section, not per test case. With -s
+		// Catch2 lists every passing assertion, which gives a count for each case.
+		// aptest makes about 40 million assertions, so it keeps its totals only.
+		const words = list.flatMap((a) => (a.startsWith('--testArgs=') ? a.slice(11).split(/\s+/) : [a]));
+		const listed = words.some((a) => a === '-s' || a === '--success');
+		if (exeName(command) !== 'aptest' && !listed) flags.unshift('-s');
 		if (exeName(command) !== 'engtest') return [...list, ...flags];
 		// engtest splits --testArgs on whitespace, so a path with a space cannot be passed.
 		if (/\s/.test(file)) return args;
@@ -196,9 +203,10 @@ function surefireFiles(from, since) {
  * Give each Catch2 XML report the task's name as its run name.
  *
  * Catch2 writes the executable name it was handed. engtest and nodetest hand it
- * bytes from freed memory, and Catch2 lets some characters through that XML
- * forbids, so the file does not always parse. The bytes are read as latin1 so
- * nothing else in the file changes.
+ * bytes from freed memory, and Catch2 lets two characters through that XML
+ * forbids (vertical tab and form feed), so the file does not always parse. The
+ * same two are escaped wherever else they occur, as an assertion's text can
+ * hold them. The bytes are read as latin1 so nothing else in the file changes.
  */
 function nameCatch2Runs(dir) {
 	for (const name of fs.readdirSync(dir).sort()) {
@@ -208,7 +216,9 @@ function nameCatch2Runs(dir) {
 			const suite = name.split('.')[0].replace(/__/g, ':');
 			const text = fs.readFileSync(file, 'latin1');
 			const named = text.replace(/(<Catch2TestRun name=")[^"]*(")/, (_all, open, close) => open + suite + close);
-			if (named !== text) fs.writeFileSync(file, named, 'latin1');
+			// Catch2 escapes the other control characters as \xNN and misses these two.
+			const clean = named.split('\v').join('\\x0B').split('\f').join('\\x0C');
+			if (clean !== text) fs.writeFileSync(file, clean, 'latin1');
 		} catch (err) {
 			console.log(`::warning::could not name the Catch2 run in ${name}: ${err.message}`);
 		}
