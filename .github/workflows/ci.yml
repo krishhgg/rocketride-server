@@ -1,5 +1,5 @@
 name: CI
-run-name: ${{ github.event.pull_request.title || github.event.head_commit.message }} ${{ (github.event_name == 'workflow_dispatch' && github.ref_name) || '' }} ${{ github.event_name == 'merge_group' && 'merge queue' || '' }}
+run-name: ${{ github.event.pull_request.title || github.event.head_commit.message }} ${{ (github.event_name == 'workflow_dispatch' && github.ref_name) || '' }} ${{ github.event_name == 'merge_group' && 'merge queue' || '' }} ${{ inputs.tag }} # HILLCLIMB-HARNESS
 
 concurrency:
   group: ci-${{ github.head_ref || github.run_id }}
@@ -15,6 +15,28 @@ on:
   schedule:
     - cron: '17 4 * * 1' # Weekly Monday 4:17 UTC
   workflow_dispatch:
+    inputs: # HILLCLIMB-HARNESS
+      os: # HILLCLIMB-HARNESS
+        description: Which Build jobs to run # HILLCLIMB-HARNESS
+        type: choice # HILLCLIMB-HARNESS
+        options: [all, ubuntu, windows, macos] # HILLCLIMB-HARNESS
+        default: all # HILLCLIMB-HARNESS
+      nodownload: # HILLCLIMB-HARNESS
+        description: Compile the engine and skip the prebuilt download # HILLCLIMB-HARNESS
+        type: boolean # HILLCLIMB-HARNESS
+        default: false # HILLCLIMB-HARNESS
+      test_targets: # HILLCLIMB-HARNESS
+        description: Builder targets for the test step, `test` or a space-separated list of module:test targets # HILLCLIMB-HARNESS
+        type: string # HILLCLIMB-HARNESS
+        default: test # HILLCLIMB-HARNESS
+      container_test: # HILLCLIMB-HARNESS
+        description: Build the node image and run nodes:test-container # HILLCLIMB-HARNESS
+        type: boolean # HILLCLIMB-HARNESS
+        default: false # HILLCLIMB-HARNESS
+      tag: # HILLCLIMB-HARNESS
+        description: Text appended to the run name, so a batch can find its runs # HILLCLIMB-HARNESS
+        type: string # HILLCLIMB-HARNESS
+        default: '' # HILLCLIMB-HARNESS
 
 permissions:
   contents: read
@@ -187,9 +209,11 @@ jobs:
                 || contains(fromJSON('["develop", "stage", "main"]'), github.event.pull_request.base.ref)
                 || startsWith(github.event.pull_request.base.ref, 'release/')
                 || contains(github.event.pull_request.labels.*.name, 'ci:test') }}
-      container_test: ${{ github.event_name != 'pull_request' || needs.changes.outputs.container == 'true' }}
+      container_test: ${{ github.event_name == 'workflow_dispatch' && (inputs.container_test == true || inputs.container_test == 'true') || github.event_name != 'workflow_dispatch' && (github.event_name != 'pull_request' || needs.changes.outputs.container == 'true') }} # HILLCLIMB-HARNESS
       # `changes` only runs on pull requests; everything else gets every suite.
-      test_targets: ${{ needs.changes.outputs.tests || 'test' }}
+      test_targets: ${{ inputs.test_targets || needs.changes.outputs.tests || 'test' }} # HILLCLIMB-HARNESS
+      os: ${{ inputs.os || 'all' }} # HILLCLIMB-HARNESS
+      nodownload: ${{ inputs.nodownload == true || inputs.nodownload == 'true' }} # HILLCLIMB-HARNESS
     secrets: inherit
 
   # ---------------------------------------------------------------------------

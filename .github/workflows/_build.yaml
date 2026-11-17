@@ -68,6 +68,11 @@ on:
         required: false
         type: number
         default: 1
+      os: # HILLCLIMB-HARNESS
+        description: Which platforms to build, one of all, ubuntu, windows or macos # HILLCLIMB-HARNESS
+        required: false # HILLCLIMB-HARNESS
+        type: string # HILLCLIMB-HARNESS
+        default: all # HILLCLIMB-HARNESS
 
 jobs:
   build:
@@ -85,22 +90,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - platform: ubuntu
-            label: Ubuntu 22.04
-            runner: ubuntu-22.04
-            builder_cmd: ./builder
-            vcpkg_cmd: ./build/vcpkg/vcpkg
-          - platform: windows
-            label: Windows Server 2022
-            runner: windows-2022
-            builder_cmd: ./builder.cmd
-            vcpkg_cmd: ./build/vcpkg/vcpkg.exe
-          - platform: macos
-            label: macOS (ARM64)
-            runner: macos-15
-            builder_cmd: ./builder
-            vcpkg_cmd: ./build/vcpkg/vcpkg
+        # The three platform entries, as JSON so `inputs.os` can pick one. # HILLCLIMB-HARNESS
+        # Any value other than ubuntu, windows or macos gives all three. # HILLCLIMB-HARNESS
+        include: ${{ fromJSON(inputs.os == 'ubuntu' && '[{"platform":"ubuntu","label":"Ubuntu 22.04","runner":"ubuntu-22.04","builder_cmd":"./builder","vcpkg_cmd":"./build/vcpkg/vcpkg"}]' || inputs.os == 'windows' && '[{"platform":"windows","label":"Windows Server 2022","runner":"windows-2022","builder_cmd":"./builder.cmd","vcpkg_cmd":"./build/vcpkg/vcpkg.exe"}]' || inputs.os == 'macos' && '[{"platform":"macos","label":"macOS (ARM64)","runner":"macos-15","builder_cmd":"./builder","vcpkg_cmd":"./build/vcpkg/vcpkg"}]' || '[{"platform":"ubuntu","label":"Ubuntu 22.04","runner":"ubuntu-22.04","builder_cmd":"./builder","vcpkg_cmd":"./build/vcpkg/vcpkg"},{"platform":"windows","label":"Windows Server 2022","runner":"windows-2022","builder_cmd":"./builder.cmd","vcpkg_cmd":"./build/vcpkg/vcpkg.exe"},{"platform":"macos","label":"macOS (ARM64)","runner":"macos-15","builder_cmd":"./builder","vcpkg_cmd":"./build/vcpkg/vcpkg"}]') }} # HILLCLIMB-HARNESS
     steps:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
