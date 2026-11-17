@@ -12,17 +12,26 @@ run-name: Prerelease ${{ github.event_name == 'workflow_dispatch' && '(manual)' 
 # publishes the prerelease slot (develop, and any manual dispatch) stays
 # in the one `prerelease` group, so two of those never race.
 #
-# A run `init` turns away (a pull request's CI, or a CI run that did not
-# succeed, see there) gets a group of its own too: the group is joined
-# before any job's `if:` is read, so in a shared one it would cancel the
-# real run in progress.
+# A develop or stage push whose CI failed still feeds the engine cache (see
+# `init`) and publishes nothing else. It has a group per branch of its own,
+# `prerelease-cache-<branch>`: in `prerelease` or `prerelease-stage` it would
+# cancel a green run in progress, whose prerelease it cannot publish itself.
+# Two red pushes to one branch still replace each other.
+#
+# A run `init` turns away (a pull request's CI, or a CI run that was
+# cancelled or skipped, see there) gets a group of its own too: the group is
+# joined before any job's `if:` is read, so in a shared one it would cancel
+# the real run in progress.
 concurrency:
   group: >-
     ${{ github.event_name == 'workflow_run' &&
         (github.event.workflow_run.event != 'push' ||
          github.event.workflow_run.head_repository.full_name != github.repository ||
-         github.event.workflow_run.conclusion != 'success') &&
+         (github.event.workflow_run.conclusion != 'success' &&
+          github.event.workflow_run.conclusion != 'failure')) &&
         format('prerelease-ignored-{0}', github.run_id) ||
+        github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'failure' &&
+        format('prerelease-cache-{0}', github.event.workflow_run.head_branch) ||
         github.event_name == 'workflow_run' && github.event.workflow_run.head_branch == 'stage' &&
         'prerelease-stage' ||
         'prerelease' }}
@@ -37,8 +46,15 @@ permissions:
 # Triggered when develop's CI run completes successfully — this is the
 # gate. A red CI on develop (whether from a bad merge, a flaky test, or
 # a PR that slipped through) leaves `workflow_run.conclusion=failure`
-# and the `if:` below skips the run, so a broken develop commit never
-# becomes a published prerelease.
+# and the `if:` on the three release jobs skips them, so a broken develop
+# commit never becomes a published prerelease.
+#
+# A red CI on develop or stage still runs init, build and engine-cache.
+# Most red runs are one flaky test on one platform, and without the engine
+# in the cache every pull request built from that packages/server compiles
+# it until some later commit happens to go green twice in a row. An engine
+# reaches the cache only when its own tests passed on its platform (see
+# `engine_cache` in _build.yaml).
 #
 # A green CI on stage runs only init, build and engine-cache: pull
 # requests into stage are built from stage's packages/server, which is
@@ -69,8 +85,10 @@ on:
 jobs:
   init:
     name: Initialize
-    # Skip when CI failed; manual dispatch runs for any of the allowed
-    # release branches (develop, stage, main).
+    # Runs for a CI run that succeeded or failed, not for one that was
+    # cancelled or skipped; manual dispatch runs for any of the allowed
+    # release branches (develop, stage, main). After a failed CI run only
+    # the engine cache is fed: the three release jobs below ask for success.
     #
     # The `head_branch == 'develop'` guard on the workflow_run side
     # makes explicit what the `branches: [develop]` filter on the
@@ -104,7 +122,8 @@ jobs:
        (github.ref == 'refs/heads/develop' ||
         github.ref == 'refs/heads/stage' ||
         github.ref == 'refs/heads/main')) ||
-      (github.event.workflow_run.conclusion == 'success' &&
+      ((github.event.workflow_run.conclusion == 'success' ||
+        github.event.workflow_run.conclusion == 'failure') &&
        github.event.workflow_run.event == 'push' &&
        github.event.workflow_run.head_repository.full_name == github.repository &&
        (github.event.workflow_run.head_branch == 'develop' ||
@@ -138,8 +157,10 @@ jobs:
   cleanup-prereleases:
     name: Clean up prereleases
     needs: build
-    # The prerelease slot is develop's; a stage push only feeds the engine cache
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.head_branch == 'develop'
+    # The prerelease slot is develop's; a stage push only feeds the engine cache,
+    # and so does a develop push whose CI failed. The same condition is on
+    # `prerelease` and `docker`.
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.head_branch == 'develop' && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest # HILLCLIMB-HARNESS
     timeout-minutes: 5 # HILLCLIMB-HARNESS
     steps: # HILLCLIMB-HARNESS stub: cleanup-prereleases
@@ -148,7 +169,7 @@ jobs:
   prerelease:
     name: Prerelease
     needs: [init, build, cleanup-prereleases]
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.head_branch == 'develop'
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.head_branch == 'develop' && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest # HILLCLIMB-HARNESS
     timeout-minutes: 5 # HILLCLIMB-HARNESS
     steps: # HILLCLIMB-HARNESS stub: prerelease
@@ -157,7 +178,7 @@ jobs:
   docker:
     name: Docker
     needs: [init, build]
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.head_branch == 'develop'
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.head_branch == 'develop' && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest # HILLCLIMB-HARNESS
     timeout-minutes: 5 # HILLCLIMB-HARNESS
     steps: # HILLCLIMB-HARNESS stub: docker
@@ -270,17 +291,28 @@ jobs:
   #
   # Docker failed on every prerelease from 2026-09-24 to 09-30 while every other
   # job stayed green, so the tags looked current and nobody looked (#2441). A red
-  # job in a workflow nobody watches is silent. This job opens one tracking
-  # issue when any job above fails, posts it to the Discord issues forum, and
-  # closes it on the next run where everything passes.
+  # job in a workflow nobody watches is silent. This job opens a tracking
+  # issue when a job above fails, posts it to the Discord issues forum, and
+  # closes it on the next run where that job passes.
   #
   # The Discord post is made here, not by discord-issues.yml: an issue created
   # with GITHUB_TOKEN does not trigger other workflows.
   #
-  # A run where `init` was skipped (CI on develop failed) is neither a failure
-  # nor a recovery, so it changes nothing.
+  # Two things are tracked, each with its own issue, because not every run
+  # says something about both:
+  #   - The prerelease: init, build, cleanup-prereleases, prerelease, docker.
+  #     Only a run that may publish one counts (a green CI run or a manual
+  #     dispatch). A run for a push whose CI failed feeds the engine cache and
+  #     nothing else, so it neither opens this issue nor closes it. A green
+  #     cache publish must not hide a failing Docker job.
+  #   - The engine cache: the engine-cache job, in every run. A build that
+  #     failed in a cache-only run is not reported: CI on that commit is red
+  #     already, and the job publishes what passed its engine tests.
   #
-  # Each branch has its own tracking issue: a green stage run (which skips
+  # A run where `init` was skipped (the CI run was cancelled, or a pull
+  # request's) is neither a failure nor a recovery, so it changes nothing.
+  #
+  # Each branch has its own tracking issues: a green stage run (which skips
   # the prerelease jobs) must not close develop's, nor a red one open it.
   # ---------------------------------------------------------------------------
   alert:
@@ -292,7 +324,7 @@ jobs:
       contents: read
       issues: write
     steps:
-      - name: Open, refresh or close the tracking issue
+      - name: Open, refresh or close the tracking issues
         id: track
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         env:
@@ -300,98 +332,128 @@ jobs:
         with:
           script: |
             const needs = JSON.parse(process.env.NEEDS);
-            const failed = Object.entries(needs)
-              .filter(([, j]) => j.result === 'failure' || j.result === 'cancelled')
-              .map(([name, j]) => `${name} (${j.result})`);
-            const branch = (context.payload.workflow_run && context.payload.workflow_run.head_branch) ||
-              context.ref.replace(/^refs\/heads\//, '');
+            const run = context.payload.workflow_run;
+            const branch = (run && run.head_branch) || context.ref.replace(/^refs\/heads\//, '');
             // develop keeps the original marker, so an issue already open still matches
-            const marker = branch === 'develop'
-              ? '<!-- prerelease-failure-alert -->'
-              : `<!-- prerelease-failure-alert:${branch} -->`;
+            const suffix = branch === 'develop' ? '' : `:${branch}`;
             const scope = branch === 'develop' ? '' : ` (${branch})`;
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-            const sha = (context.payload.workflow_run && context.payload.workflow_run.head_sha) || context.sha;
+            const sha = (run && run.head_sha) || context.sha;
+            // A push whose CI failed only feeds the engine cache
+            const cacheOnly = Boolean(run) && run.conclusion !== 'success';
+
+            const tracks = [
+              {
+                name: 'Prerelease',
+                what: 'The prerelease run',
+                marker: `<!-- prerelease-failure-alert${suffix} -->`,
+                jobs: ['init', 'build', 'cleanup-prereleases', 'prerelease', 'docker'],
+                bad: ['failure', 'cancelled'],
+                counts: !cacheOnly,
+                why: 'Jobs that passed still published, so tags and prereleases can look current while an artifact (for example the Docker image) is stale.',
+                closes: 'the next fully green prerelease',
+                says: 'Prerelease failed and nothing else will say so: ',
+              },
+              {
+                name: 'Engine cache',
+                what: 'The engine cache publish',
+                marker: `<!-- engine-cache-failure-alert${suffix} -->`,
+                jobs: ['engine-cache'],
+                // A cancelled or skipped publish says nothing about the cache
+                bad: ['failure'],
+                counts: ['success', 'failure'].includes(needs['engine-cache'].result),
+                why: 'The `engine-cache` release may lack the engines of this commit, so builds whose packages/server matches it compile the engine instead of downloading it.',
+                closes: 'the next run that publishes to the engine cache',
+                says: 'Engine cache publishing failed and nothing else will say so: ',
+              },
+            ];
 
             const open = await github.paginate(github.rest.issues.listForRepo, {
               owner: context.repo.owner, repo: context.repo.repo,
               state: 'open', labels: 'prerelease-failing',
             });
-            const issue = open.find(i => (i.body || '').includes(marker));
+            // The issues the Discord step still has to post
+            const notify = [];
 
-            if (failed.length === 0) {
-              core.setOutput('action', 'none');
+            for (const track of tracks) {
+              if (!track.counts) continue;
+              const failed = track.jobs
+                .filter((name) => track.bad.includes(needs[name].result))
+                .map((name) => `${name} (${needs[name].result})`);
+              const issue = open.find(i => (i.body || '').includes(track.marker));
+
+              if (failed.length === 0) {
+                if (issue) {
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner, repo: context.repo.repo,
+                    issue_number: issue.number,
+                    body: `${track.name} is green again at \`${sha.slice(0, 8)}\` ([run](${runUrl})). Closing.`,
+                  });
+                  await github.rest.issues.update({
+                    owner: context.repo.owner, repo: context.repo.repo,
+                    issue_number: issue.number, state: 'closed', state_reason: 'completed',
+                  });
+                  core.notice(`Closed #${issue.number}.`);
+                }
+                continue;
+              }
+
+              const body = [
+                track.marker,
+                `${track.what}${scope} for \`${sha.slice(0, 8)}\` failed: **${failed.join(', ')}**.`,
+                '',
+                `Run: ${runUrl}`,
+                '',
+                track.why,
+                '',
+                `_Opened and refreshed by the \`alert\` job in \`prerelease.yaml\`. It closes itself on ${track.closes}._`,
+              ].join('\n');
+
               if (issue) {
-                await github.rest.issues.createComment({
-                  owner: context.repo.owner, repo: context.repo.repo,
-                  issue_number: issue.number,
-                  body: `Prerelease is green again at \`${sha.slice(0, 8)}\` ([run](${runUrl})). Closing.`,
-                });
                 await github.rest.issues.update({
                   owner: context.repo.owner, repo: context.repo.repo,
-                  issue_number: issue.number, state: 'closed', state_reason: 'completed',
+                  issue_number: issue.number, body,
                 });
-                core.notice(`Closed #${issue.number}.`);
+                if (!(issue.labels || []).some(l => (l.name || l) === 'discord-notified')) {
+                  notify.push({ number: issue.number, title: issue.title, url: issue.html_url, says: track.says });
+                }
+                core.notice(`Refreshed #${issue.number}.`);
+              } else {
+                const created = await github.rest.issues.create({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  title: `${track.name} failing${scope}: ${failed.join(', ')}`,
+                  body, labels: ['prerelease-failing'],
+                });
+                notify.push({
+                  number: created.data.number, title: created.data.title,
+                  url: created.data.html_url, says: track.says,
+                });
+                core.notice(`Opened #${created.data.number}.`);
               }
-              return;
             }
 
-            const body = [
-              marker,
-              `The prerelease run${scope} for \`${sha.slice(0, 8)}\` failed: **${failed.join(', ')}**.`,
-              '',
-              `Run: ${runUrl}`,
-              '',
-              'Jobs that passed still published, so tags and prereleases can look current while an artifact (for example the Docker image) is stale.',
-              '',
-              '_Opened and refreshed by the `alert` job in `prerelease.yaml`. It closes itself on the next fully green prerelease._',
-            ].join('\n');
-
-            if (issue) {
-              await github.rest.issues.update({
-                owner: context.repo.owner, repo: context.repo.repo,
-                issue_number: issue.number, body,
-              });
-              core.setOutput('action', 'refreshed');
-              core.setOutput('url', issue.html_url);
-              core.setOutput('title', issue.title);
-              core.setOutput('number', String(issue.number));
-              core.setOutput('notified', String((issue.labels || []).some(l => (l.name || l) === 'discord-notified')));
-              core.notice(`Refreshed #${issue.number}.`);
-            } else {
-              const created = await github.rest.issues.create({
-                owner: context.repo.owner, repo: context.repo.repo,
-                title: `Prerelease failing${scope}: ${failed.join(', ')}`,
-                body, labels: ['prerelease-failing'],
-              });
-              core.setOutput('action', 'opened');
-              core.setOutput('url', created.data.html_url);
-              core.setOutput('title', created.data.title);
-              core.setOutput('number', String(created.data.number));
-              core.setOutput('notified', 'false');
-              core.notice(`Opened #${created.data.number}.`);
-            }
+            core.setOutput('issues', JSON.stringify(notify));
 
       # Posts once per tracking issue. Delivery is recorded as the
       # `discord-notified` label, added only after Discord confirms the
       # message (wait=true), so a failed post is retried on the next run.
       - name: Post to the Discord issues forum
-        if: steps.track.outputs.action != 'none' && steps.track.outputs.notified != 'true'
+        if: steps.track.outputs.issues != '' && steps.track.outputs.issues != '[]'
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_ISSUES_FORUM_WEBHOOK_URL }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          NUMBER: ${{ steps.track.outputs.number }}
-          TITLE: ${{ steps.track.outputs.title }}
-          URL: ${{ steps.track.outputs.url }}
+          ISSUES: ${{ steps.track.outputs.issues }}
         run: |
           if [ -z "$DISCORD_WEBHOOK_URL" ]; then
             echo "DISCORD_ISSUES_FORUM_WEBHOOK_URL is not set; skipping"
             exit 0
           fi
-          payload=$(jq -n --arg t "$TITLE" --arg u "$URL" \
-            '{thread_name: ($t | .[0:100]), content: ("Prerelease failed and nothing else will say so: " + $u)}')
           case "$DISCORD_WEBHOOK_URL" in *\?*) sep='&' ;; *) sep='?' ;; esac
-          curl -sS --fail-with-body --connect-timeout 10 --max-time 30 \
-            -H 'Content-Type: application/json' -d "$payload" "${DISCORD_WEBHOOK_URL}${sep}wait=true" >/dev/null
-          gh api -X POST "repos/$REPO/issues/$NUMBER/labels" -f 'labels[]=discord-notified' >/dev/null
+          jq -c '.[]' <<<"$ISSUES" | while read -r issue; do
+            payload=$(jq -n --argjson i "$issue" '{thread_name: ($i.title | .[0:100]), content: ($i.says + $i.url)}')
+            curl -sS --fail-with-body --connect-timeout 10 --max-time 30 \
+              -H 'Content-Type: application/json' -d "$payload" "${DISCORD_WEBHOOK_URL}${sep}wait=true" >/dev/null
+            number=$(jq -r '.number' <<<"$issue")
+            gh api -X POST "repos/$REPO/issues/$number/labels" -f 'labels[]=discord-notified' >/dev/null
+          done
