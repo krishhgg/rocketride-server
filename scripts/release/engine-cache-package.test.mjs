@@ -89,6 +89,23 @@ describe('selectEntries', () => {
 		]);
 	});
 
+	it('counts each file left out once, under the source that matched it', () => {
+		// tika-config.xml lies under nodes/src/nodes too, and is not a node file
+		const { dropped, left } = selectEntries(linuxState(), ROOT);
+		assert.deepEqual(left, {
+			'packages/ai/src': 2,
+			'nodes/src/nodes': 2,
+			'nodes/src/nodes/parse/lib/parse': 1,
+			'build/parse': 3,
+			'build/java/core': 3,
+			'build/java/dbgconn': 1,
+		});
+		assert.equal(
+			Object.values(left).reduce((sum, count) => sum + count, 0),
+			Object.values(dropped).flat().length
+		);
+	});
+
 	it('leaves out every jar a downloading build makes with Maven, and keeps the JRE', () => {
 		// A consumer with the same server hash and an upgraded dependency would
 		// otherwise keep the archive's log4j-core-2.25.2.jar beside its own
@@ -201,13 +218,17 @@ describe('packageEngine', () => {
 			calls.push({ file, cwd, files, before: (await fs.readdir(out)).sort() });
 			await fs.writeFile(file, 'archive');
 		};
+		const lines = [];
 		const result = await packageEngine({
 			root,
 			out,
 			platform: platformInfo('linux', 'x64'),
 			archive,
-			log: () => {},
+			log: (line) => lines.push(line),
 		});
+		assert.ok(lines.includes('Packaging 8 file(s), leaving out 12 a downloading build makes again:'));
+		assert.ok(lines.includes('  2 from nodes/src/nodes'));
+		assert.ok(lines.includes('  1 from nodes/src/nodes/parse/lib/parse'));
 
 		assert.equal(calls.length, 1);
 		assert.equal(calls[0].cwd, path.join(root, 'dist', 'server'));

@@ -108,13 +108,14 @@ function normalize(p) {
  *
  * @param {Object<string, string[]>} packageState - `package` of build/state.json
  * @param {string} root - The repository root the build ran in
- * @returns {{kept: Object<string, string[]>, dropped: Object<string, string[]>}}
+ * @returns {{kept: Object<string, string[]>, dropped: Object<string, string[]>, left: Object<string, number>}}
+ *   `left` counts the files left out per REBUILT source, each file once
  */
 export function selectEntries(packageState, root) {
 	const base = normalize(root);
 	const kept = {};
 	const dropped = {};
-	const seen = new Set();
+	const left = {};
 
 	for (const [source, files] of Object.entries(packageState)) {
 		const at = normalize(source);
@@ -125,7 +126,7 @@ export function selectEntries(packageState, root) {
 		});
 		if (entry) {
 			dropped[source] = files;
-			seen.add(entry.source);
+			left[entry.source] = (left[entry.source] ?? 0) + files.length;
 		} else {
 			kept[source] = files;
 		}
@@ -134,7 +135,7 @@ export function selectEntries(packageState, root) {
 	// A renamed tree or a changed state layout must not turn this back into
 	// the full archive without anyone noticing
 	for (const { source, required } of REBUILT) {
-		if (required && !seen.has(source)) {
+		if (required && !left[source]) {
 			throw new Error(
 				`The package state has nothing staged from ${source}, so the cache archive is not packaged`
 			);
@@ -154,7 +155,7 @@ export function selectEntries(packageState, root) {
 	}
 	if (!Object.keys(kept).length) throw new Error('Nothing left to package for the cache');
 
-	return { kept, dropped };
+	return { kept, dropped, left };
 }
 
 /** The builder's own archive writer, so `server:download` reads what it always has. */
@@ -191,9 +192,9 @@ export async function packageEngine({ root, out, platform = platformInfo(), arch
 		JSON.stringify({ platform: platform.name, buildHash: hash }) + '\n'
 	);
 
-	const { kept, dropped } = selectEntries(state.package, root);
+	const { kept, left: leftBy } = selectEntries(state.package, root);
 	const files = [...new Set(Object.values(kept).flat())];
-	const left = Object.values(dropped).flat().length;
+	const left = Object.values(leftBy).reduce((sum, count) => sum + count, 0);
 
 	const base = `rocketride-server-v${version}-${platform.name}`;
 	const archivePath = path.join(out, `${base}.${platform.ext}`);
@@ -201,13 +202,7 @@ export async function packageEngine({ root, out, platform = platformInfo(), arch
 
 	log(`${platform.name}: buildHash ${hash}`);
 	log(`Packaging ${files.length} file(s), leaving out ${left} a downloading build makes again:`);
-	for (const { source } of REBUILT) {
-		const prefix = normalize(`${normalize(root)}/${source}`);
-		const count = Object.entries(dropped)
-			.filter(([from]) => normalize(from) === prefix || normalize(from).startsWith(`${prefix}/`))
-			.reduce((sum, [, list]) => sum + list.length, 0);
-		log(`  ${count} from ${source}`);
-	}
+	for (const { source } of REBUILT) log(`  ${leftBy[source] ?? 0} from ${source}`);
 	await fs.rm(archivePath, { force: true });
 	await (archive ?? builderArchive(root))(archivePath, path.join(root, 'dist', 'server'), files);
 
